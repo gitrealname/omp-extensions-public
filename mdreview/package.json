@@ -1,0 +1,8 @@
+{
+  "name": "@local/omp-mdreview",
+  "version": "1.0.0",
+  "description": "OMP extension: interactive markdown review with annotation and AI chat",
+  "omp": {
+    "extensions": ["./src/main.ts"]
+  }
+}

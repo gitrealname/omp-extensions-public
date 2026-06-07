@@ -1,0 +1,8 @@
+{
+  "name": "omp-extension-graphify",
+  "version": "1.0.0",
+  "description": "OMP extension: graphify knowledge graph slash command + proxy server for LLM extraction",
+  "omp": {
+    "extensions": ["./src/main.ts"]
+  }
+}

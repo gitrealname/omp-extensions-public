@@ -1,0 +1,713 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mreview</title>
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; display: flex; height: 100vh; background: #1e1e2e; color: #cdd6f4; }
+
+#doc-panel { flex: 1; overflow-y: auto; padding: 32px 48px; background: #1e1e2e; position: relative; }
+#doc-panel h1 { font-size: 24px; margin-bottom: 16px; color: #89b4fa; }
+#doc-panel h2 { font-size: 19px; margin: 28px 0 12px; padding-bottom: 6px; border-bottom: 1px solid #313244; color: #89b4fa; }
+#doc-panel h3 { font-size: 16px; margin: 20px 0 8px; color: #a6e3a1; }
+#doc-panel h4 { font-size: 14px; margin: 16px 0 6px; color: #cba6f7; }
+#doc-panel p { margin: 8px 0; line-height: 1.7; }
+#doc-panel a { color: #89b4fa; }
+#doc-panel ul, #doc-panel ol { margin: 8px 0 8px 24px; }
+#doc-panel li { margin: 4px 0; line-height: 1.6; }
+#doc-panel code { background: #313244; padding: 2px 6px; border-radius: 3px; font-size: 13px; color: #f38ba8; }
+#doc-panel pre { background: #181825; padding: 16px; border-radius: 8px; overflow-x: auto; margin: 12px 0; border: 1px solid #313244; }
+#doc-panel pre code { background: none; padding: 0; color: #cdd6f4; }
+#doc-panel table { border-collapse: collapse; width: 100%; margin: 12px 0; font-size: 14px; }
+#doc-panel th, #doc-panel td { border: 1px solid #313244; padding: 8px 12px; text-align: left; }
+#doc-panel th { background: #313244; font-weight: 600; color: #89b4fa; }
+#doc-panel blockquote { border-left: 3px solid #89b4fa; padding: 8px 16px; margin: 12px 0; background: #181825; border-radius: 0 6px 6px 0; }
+#doc-panel hr { border: none; border-top: 1px solid #313244; margin: 24px 0; }
+#doc-panel strong { color: #f5c2e7; }
+#doc-panel em { color: #f9e2af; }
+
+.annotated { background: rgba(249,226,175,0.15); border-bottom: 2px solid #f9e2af; cursor: pointer; }
+.annotation-note { background: #313244; border: 1px solid #f9e2af; border-radius: 6px; padding: 8px 12px; margin: 6px 0; font-size: 13px; color: #f9e2af; }
+.annotation-note .ann-text { display: inline; }
+.annotation-note .ann-del { float: right; cursor: pointer; color: #f38ba8; font-size: 11px; margin-left: 8px; }
+.annotation-note .ann-del:hover { color: #fab387; }
+.annotation-note .ann-ask { float: right; cursor: pointer; color: #89b4fa; font-size: 11px; margin-left: 8px; }
+.annotation-note .ann-ask:hover { color: #74c7ec; }
+
+/* Label badge in annotation note */
+.ann-label { display: inline-block; font-size: 10px; font-weight: 700; padding: 1px 6px; border-radius: 3px; margin-right: 6px; vertical-align: middle; }
+.ann-label.suggestion { background: #1e3a5f; color: #89b4fa; }
+.ann-label.nit       { background: #2a2a3e; color: #a6adc8; }
+.ann-label.question  { background: #1e3a5f; color: #89b4fa; }
+.ann-label.issue     { background: #3d1f2a; color: #f38ba8; }
+
+#ann-input-box { position: relative; display: none; background: #313244; border: 1px solid #f9e2af; border-radius: 8px; padding: 8px; margin: 8px 0; }
+#ann-copy { position: absolute; top: 6px; right: 6px; padding: 2px 7px; border-radius: 3px; font-size: 11px; font-weight: 600; cursor: pointer; border: 1px solid #45475a; background: #1e1e2e; color: #6c7086; transition: all 0.15s; }
+#ann-copy:hover { color: #cdd6f4; border-color: #89b4fa; }
+#ann-copy.copied { color: #a6e3a1; border-color: #a6e3a1; }
+body.light #ann-copy { background: #f0f0f0; color: #666; border-color: #ddd; }
+body.light #ann-copy:hover { color: #333; border-color: #999; }
+body.light #ann-copy.copied { color: #2e7d32; border-color: #2e7d32; }
+#ann-input-box .ann-location { font-size: 10px; color: #6c7086; margin-bottom: 6px; }
+#ann-input-box .label-row { display: flex; gap: 4px; margin-bottom: 6px; flex-wrap: wrap; }
+#ann-input-box .lbl { padding: 2px 8px; border-radius: 3px; font-size: 11px; font-weight: 600; cursor: pointer; border: 1px solid transparent; background: #1e1e2e; color: #6c7086; transition: all 0.1s; }
+#ann-input-box .lbl:hover { color: #cdd6f4; border-color: #45475a; }
+#ann-input-box .lbl.active.suggestion { background: #1e3a5f; color: #89b4fa; border-color: #89b4fa; }
+#ann-input-box .lbl.active.nit       { background: #2a2a3e; color: #a6adc8; border-color: #a6adc8; }
+#ann-input-box .lbl.active.question  { background: #1e3a5f; color: #89b4fa; border-color: #89b4fa; }
+#ann-input-box .lbl.active.issue     { background: #3d1f2a; color: #f38ba8; border-color: #f38ba8; }
+#ann-input-box textarea { width: 100%; background: #1e1e2e; border: 1px solid #45475a; color: #cdd6f4; padding: 8px; border-radius: 4px; font-size: 13px; font-family: inherit; resize: none; outline: none; }
+#ann-input-box textarea:focus { border-color: #f9e2af; }
+#ann-input-box .ann-actions { display: flex; gap: 6px; margin-top: 6px; justify-content: flex-end; }
+#ann-input-box .ann-actions button { padding: 4px 12px; border-radius: 4px; font-size: 12px; font-weight: 600; cursor: pointer; border: none; }
+#ann-save { background: #f9e2af; color: #1e1e2e; }
+#ann-cancel { background: #45475a; color: #cdd6f4; }
+
+#resize-handle { width: 4px; cursor: col-resize; background: #313244; transition: background 0.15s; }
+#resize-handle:hover { background: #89b4fa; }
+
+#chat-panel { width: 400px; min-width: 280px; display: flex; flex-direction: column; background: #181825; border-left: 1px solid #313244; }
+
+/* Header with actions */
+#chat-header { padding: 10px 16px; border-bottom: 1px solid #313244; display: flex; align-items: center; gap: 10px; }
+#chat-header .title { font-size: 14px; font-weight: 600; color: #89b4fa; }
+#chat-header .spacer { flex: 1; }
+#chat-header .ann-count { font-size: 11px; color: #f9e2af; }
+#chat-header .status { font-size: 11px; color: #6c7086; }
+.header-btn { padding: 5px 12px; border-radius: 5px; font-size: 12px; font-weight: 600; cursor: pointer; border: none; }
+#submit-btn { background: #a6e3a1; color: #1e1e2e; }
+#submit-btn:hover { background: #94e2d5; }
+#close-btn { background: #45475a; color: #cdd6f4; }
+#close-btn:hover { background: #585b70; }
+
+#chat-messages { flex: 1; overflow-y: auto; padding: 12px 16px; display: flex; flex-direction: column; gap: 12px; }
+.msg { padding: 10px 14px; border-radius: 8px; font-size: 13px; line-height: 1.6; max-width: 95%; word-wrap: break-word; }
+.msg.user { background: #313244; align-self: flex-end; }
+.msg.assistant { background: #1e1e2e; align-self: flex-start; border: 1px solid #313244; }
+.msg.assistant code { background: #313244; padding: 1px 4px; border-radius: 3px; font-size: 12px; }
+.msg.assistant pre { background: #181825; padding: 10px; border-radius: 6px; margin: 8px 0; overflow-x: auto; border: 1px solid #313244; }
+.msg.assistant pre code { background: none; padding: 0; }
+.msg.error { background: #45273a; color: #f38ba8; border: 1px solid #f38ba8; }
+
+/* Chat input at bottom */
+#chat-input-area { padding: 10px 12px; border-top: 1px solid #313244; display: flex; gap: 8px; align-items: flex-end; }
+#chat-input { flex: 1; padding: 10px 14px; background: #313244; border: 1px solid #45475a; color: #cdd6f4; border-radius: 8px; font-size: 13px; outline: none; resize: none; font-family: inherit; min-height: 40px; max-height: 120px; }
+#chat-input:focus { border-color: #89b4fa; }
+#chat-input::placeholder { color: #6c7086; }
+#send-btn { padding: 10px 16px; background: #89b4fa; color: #1e1e2e; border: none; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; white-space: nowrap; }
+#send-btn:hover { background: #74c7ec; }
+#send-btn:disabled { background: #45475a; color: #6c7086; cursor: not-allowed; }
+
+/* Light theme for doc panel */
+body.light #doc-panel { background: #fafafa; color: #333; }
+body.light #doc-panel h1 { color: #1971c2; }
+body.light #doc-panel h2 { color: #1971c2; border-bottom-color: #ddd; }
+body.light #doc-panel h3 { color: #2b8a3e; }
+body.light #doc-panel h4 { color: #7048e8; }
+body.light #doc-panel p { color: #333; }
+body.light #doc-panel a { color: #1971c2; }
+body.light #doc-panel code { background: #f0f0f0; color: #c92a2a; }
+body.light #doc-panel pre { background: #f5f5f5; border-color: #ddd; }
+body.light #doc-panel pre code { color: #333; }
+body.light #doc-panel th, body.light #doc-panel td { border-color: #ddd; }
+body.light #doc-panel th { background: #f0f0f0; color: #1971c2; }
+body.light #doc-panel blockquote { background: #f0f4ff; border-left-color: #1971c2; }
+body.light #doc-panel hr { border-top-color: #ddd; }
+body.light #doc-panel strong { color: #c92a2a; }
+body.light #doc-panel em { color: #e67700; }
+body.light .annotated { background: rgba(255,200,50,0.2); border-bottom-color: #e67700; }
+body.light .annotation-note { background: #fff8e1; border-color: #e67700; color: #795548; }
+body.light #ann-input-box { background: #fff; border-color: #e67700; }
+body.light #ann-input-box textarea { background: #fafafa; border-color: #ddd; color: #333; }
+body.light #ann-input-box .ann-location { color: #999; }
+body.light #ann-input-box .lbl { background: #f0f0f0; color: #666; border-color: #ddd; }
+body.light #ann-input-box .lbl:hover { background: #e0e0e0; color: #333; border-color: #999; }
+body.light #ann-input-box .lbl.active.suggestion { background: #e3efff; color: #1971c2; border-color: #1971c2; }
+body.light #ann-input-box .lbl.active.nit       { background: #f5f5f5; color: #555;    border-color: #999; }
+body.light #ann-input-box .lbl.active.question  { background: #e3efff; color: #1971c2; border-color: #1971c2; }
+body.light #ann-input-box .lbl.active.issue     { background: #ffe3e3; color: #c92a2a; border-color: #c92a2a; }
+body.light .ann-label.suggestion { background: #e3efff; color: #1971c2; }
+body.light .ann-label.nit        { background: #f0f0f0; color: #555; }
+body.light .ann-label.question   { background: #e3efff; color: #1971c2; }
+body.light .ann-label.issue      { background: #ffe3e3; color: #c92a2a; }
+body.light #resize-handle { background: #ddd; }
+body.light #resize-handle:hover { background: #1971c2; }
+
+/* Font size control */
+#font-size-ctrl { display: flex; align-items: center; gap: 3px; }
+#font-size-ctrl button { background: none; border: 1px solid #45475a; color: #6c7086; width: 20px; height: 20px; border-radius: 3px; font-size: 11px; font-weight: 700; cursor: pointer; line-height: 1; padding: 0; display: flex; align-items: center; justify-content: center; }
+#font-size-ctrl button:hover { border-color: #89b4fa; color: #89b4fa; }
+#font-size-val { font-size: 10px; color: #6c7086; min-width: 18px; text-align: center; font-family: ui-monospace, monospace; }
+/* Theme toggle */
+#theme-toggle { background: none; border: 1px solid #45475a; color: #6c7086; padding: 3px 8px; border-radius: 4px; font-size: 11px; cursor: pointer; }
+#theme-toggle:hover { border-color: #89b4fa; color: #89b4fa; }
+</style>
+</head>
+<body>
+
+<div id="doc-panel"><div id="doc-content"></div></div>
+<div id="resize-handle"></div>
+<div id="chat-panel">
+  <div id="chat-header">
+    <div id="font-size-ctrl">
+      <button id="font-dec" title="Decrease font size">A-</button>
+      <span id="font-size-val">13</span>
+      <button id="font-inc" title="Increase font size">A+</button>
+    </div>
+    <button id="theme-toggle" title="Toggle light/dark document view">&#x2600;&#xFE0F;</button>
+    <span class="ann-count" id="ann-count"></span>
+    <span class="spacer"></span>
+    <button class="header-btn" id="submit-btn">Submit Comments</button>
+    <button class="header-btn" id="close-btn">Close</button>
+  </div>
+  <div id="chat-messages"></div>
+  <div id="chat-input-area">
+    <textarea id="chat-input" placeholder="Ask about this document..." rows="1"></textarea>
+    <button id="send-btn">Send</button>
+  </div>
+</div>
+
+<script>
+const annotations = [];
+let annCounter = 0;
+let filePath = '';
+let markdownLines = [];  // kept in sync after every render
+
+// --- FNV-1a 32-bit hash (browser-safe, no crypto) ---
+function fnv1a(str) {
+  let h = 2166136261;
+  for (let i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i);
+    h = Math.imul(h, 16777619) >>> 0;
+  }
+  return h.toString(16);
+}
+
+// Compute context hash: C lines above/below the annotation (for relocation)
+const HASH_CONTEXT = 3;
+function computeContextHash(lines, lineStart, lineEnd) {
+  // lineStart/lineEnd are 1-indexed; clamp to array bounds
+  const from = Math.max(0, lineStart - 1 - HASH_CONTEXT);
+  const to   = Math.min(lines.length - 1, lineEnd - 1 + HASH_CONTEXT);
+  return fnv1a(lines.slice(from, to + 1).join('\n'));
+}
+
+// Slide a context window through newLines to find where ann moved to.
+// Returns { lineStart, lineEnd } (1-indexed) or null if not found.
+function findNewPosition(ann, newLines) {
+  if (ann.contextHash === null) return null;
+  const span = ann.lineEnd - ann.lineStart;  // 0 = single line
+  // newLineStart ranges 1..newLines.length-span (annotation must fit in the file)
+  const maxStart = newLines.length - span;
+  for (let newLineStart = 1; newLineStart <= maxStart; newLineStart++) {
+    const newLineEnd = newLineStart + span;
+    if (computeContextHash(newLines, newLineStart, newLineEnd) === ann.contextHash) {
+      return { lineStart: newLineStart, lineEnd: newLineEnd };
+    }
+  }
+  return null;
+}
+
+// Build the annotation-note HTML string (shared by save and re-inject)
+function buildAnnotationNoteHtml(ann) {
+  const locationText = ann.lineStart !== null
+    ? (ann.lineStart === ann.lineEnd ? `Line ${ann.lineStart}` : `Lines ${ann.lineStart}-${ann.lineEnd}`)
+    : '';
+  const labelHtml = ann.label ? `<span class="ann-label ${ann.label}">${ann.label}</span>` : '';
+  const locHtml   = locationText
+    ? `<span style="font-size:10px;color:#6c7086;margin-right:6px">${locationText}</span>`
+    : '';
+  return `<div class="annotation-note" data-ann-id="${ann.id}">
+      <span class="ann-del" onclick="deleteAnnotation('${ann.id}')">&#x2715;</span>
+      <span class="ann-ask" onclick="askAboutAnnotation('${ann.id}')">Send</span>
+      ${locHtml}${labelHtml}<span class="ann-text">&#x1F4AC; ${marked.parseInline(ann.comment)}</span>
+    </div>`;
+}
+
+// Place a survived annotation's note card after the matching data-start-line block
+function injectAnnotationNote(ann) {
+  if (ann.lineStart === null) return;
+  // Find the block whose start-line is closest to (but not after) lineStart
+  const blocks = document.querySelectorAll('#doc-content [data-start-line]');
+  let target = null;
+  for (const block of blocks) {
+    const sl = parseInt(block.dataset.startLine);
+    if (sl <= ann.lineStart) target = block;
+    else break;
+  }
+  if (!target) return;
+  target.insertAdjacentHTML('afterend', buildAnnotationNoteHtml(ann));
+}
+
+// Migrate annotations after file reload: relocate survivors, drop the rest
+function migrateAnnotations(newLines) {
+  const total    = annotations.length;
+  const survived = [];
+  for (const ann of annotations) {
+    const pos = findNewPosition(ann, newLines);
+    if (pos) {
+      ann.lineStart = pos.lineStart;
+      ann.lineEnd   = pos.lineEnd;
+      survived.push(ann);
+    }
+  }
+  // Replace in-place
+  annotations.length = 0;
+  for (const a of survived) annotations.push(a);
+  // Re-inject note cards for survivors
+  for (const ann of annotations) injectAnnotationNote(ann);
+  return { kept: survived.length, dropped: total - survived.length };
+}
+
+// --- Render markdown with data-start-line / data-end-line on each block ---
+function renderWithLineNumbers(markdown) {
+  const tokens = marked.lexer(markdown);
+  let line = 1;
+  let html = '';
+  for (const token of tokens) {
+    const startLine = line;
+    const newlines = (token.raw.match(/\n/g) || []).length;
+    line += newlines;
+    const endLine = Math.max(startLine, line - 1);
+    let rendered = marked.parser([token]);
+    // Inject data attributes into the first opening tag of the rendered block
+    rendered = rendered.replace(/^(<[a-zA-Z][^>]*)>/, `$1 data-start-line="${startLine}" data-end-line="${endLine}">`);
+    html += rendered;
+  }
+  return html;
+}
+
+fetch('/api/doc-content').then(r => r.json()).then(data => {
+  filePath = data.filePath;
+  document.title = 'mreview - ' + filePath.split(/[\/\\]/).pop();
+  markdownLines = data.markdown.split('\n');
+  document.getElementById('doc-content').innerHTML = renderWithLineNumbers(data.markdown);
+  // Subscribe to live file changes after initial load
+  startDocWatch();
+}).catch(() => {
+  document.getElementById('doc-content').innerHTML = '<p style="color:#f38ba8">Failed to load document.</p>';
+});
+
+function startDocWatch() {
+  const es = new EventSource('/api/doc-watch');
+  es.onmessage = (e) => {
+    let payload;
+    try { payload = JSON.parse(e.data); } catch { return; }
+    if (typeof payload.markdown !== 'string') return;
+    // Stash scroll position
+    const newLines = payload.markdown.split('\n');
+    const docPanel = document.getElementById('doc-panel');
+    const scrollTop = docPanel.scrollTop;
+    // Re-render (annotation note DOM is wiped here; we re-inject survivors below)
+    document.querySelectorAll('.annotated, #ann-input-box').forEach(el => el.replaceWith(...el.childNodes));
+    document.querySelectorAll('.annotation-note').forEach(el => el.remove());
+    docPanel.querySelector('#doc-content').innerHTML = renderWithLineNumbers(payload.markdown);
+    markdownLines = newLines;
+    docPanel.scrollTop = scrollTop;
+    // Relocate surviving annotations; drop those whose context changed too much
+    const { kept, dropped } = migrateAnnotations(newLines);
+    updateAnnCount();
+    if (dropped > 0 && kept > 0) showToast(`Document updated — ${kept} annotation${kept > 1 ? 's' : ''} relocated, ${dropped} dropped`);
+    else if (dropped > 0)        showToast(`Document updated — ${dropped} annotation${dropped > 1 ? 's' : ''} dropped (lines changed)`);
+    else if (kept > 0)           showToast(`Document updated — ${kept} annotation${kept > 1 ? 's' : ''} relocated`);
+    else                         showToast('Document updated');
+  };
+  es.onerror = () => { es.close(); setTimeout(startDocWatch, 3000); };
+}
+
+function showToast(msg) {
+  let t = document.getElementById('mdreview-toast');
+  if (!t) {
+    t = document.createElement('div');
+    t.id = 'mdreview-toast';
+    t.style.cssText = 'position:fixed;bottom:16px;left:50%;transform:translateX(-50%);background:#313244;color:#cdd6f4;padding:8px 18px;border-radius:6px;font-size:12px;z-index:9999;pointer-events:none;transition:opacity 0.4s';
+    document.body.appendChild(t);
+  }
+  t.textContent = msg;
+  t.style.opacity = '1';
+  clearTimeout(t._timer);
+  t._timer = setTimeout(() => { t.style.opacity = '0'; }, 2500);
+}
+
+// --- Extract line/char info from a DOM Range ---
+function getSelectionMeta(range) {
+  // Walk up from start container to find nearest block with data-start-line
+  let node = range.startContainer.nodeType === 3
+    ? range.startContainer.parentElement
+    : range.startContainer;
+  let lineStart = null, lineEnd = null;
+  while (node && node.id !== 'doc-content') {
+    if (node.dataset && node.dataset.startLine) {
+      lineStart = parseInt(node.dataset.startLine);
+      lineEnd   = parseInt(node.dataset.endLine);
+      break;
+    }
+    node = node.parentElement;
+  }
+  // Char offsets: offset within the text content of the start/end containers
+  const charStart = range.startOffset;
+  const charEnd   = range.endOffset;
+  return { lineStart, lineEnd, charStart, charEnd };
+}
+
+// --- Annotations ---
+let pendingRange = null;
+
+document.getElementById('doc-panel').addEventListener('mouseup', e => {
+  const sel = window.getSelection();
+  if (!sel || sel.isCollapsed || !sel.toString().trim()) return;
+  const range = sel.getRangeAt(0);
+  if (range.startContainer.closest && range.startContainer.closest('.annotation-note,[id=ann-input-box]')) return;
+  pendingRange = range.cloneRange();
+  openCommentBox();
+});
+
+function openCommentBox() {
+  if (!pendingRange) return;
+  const selectedText = pendingRange.toString();
+  const id = 'ann-' + (++annCounter);
+  const meta = getSelectionMeta(pendingRange);
+
+  // Wrap selection
+  const wrapper = document.createElement('span');
+  wrapper.className = 'annotated';
+  wrapper.dataset.annId = id;
+  try {
+    pendingRange.surroundContents(wrapper);
+  } catch {
+    const frag = pendingRange.extractContents();
+    wrapper.appendChild(frag);
+    pendingRange.insertNode(wrapper);
+  }
+
+  // Build location label
+  let locationText = '';
+  if (meta.lineStart !== null) {
+    locationText = meta.lineStart === meta.lineEnd
+      ? `Line ${meta.lineStart}`
+      : `Lines ${meta.lineStart}-${meta.lineEnd}`;
+    if (meta.charStart !== null) locationText += ` (chars ${meta.charStart}-${meta.charEnd})`;
+  }
+  const previewText = selectedText.slice(0, 80) + (selectedText.length > 80 ? '\u2026' : '');
+
+  let selectedLabel = 'nit';
+
+  const noteBox = document.createElement('div');
+  noteBox.id = 'ann-input-box';
+  noteBox.style.display = 'block';
+  noteBox.style.fontSize = fontSize + 'px';
+  noteBox.innerHTML = `
+    <button id="ann-copy" title="Copy selection to clipboard">Copy</button>
+    <div class="ann-location">${locationText ? locationText + ' - ' : ''}"${previewText}"</div>
+    <div class="label-row">
+      <button class="lbl suggestion" data-label="suggestion" title="Proposes an improvement">suggestion</button>
+      <button class="lbl nit"        data-label="nit"        title="Trivial, preference-based">nit</button>
+      <button class="lbl question"   data-label="question"   title="Seeking clarification">question</button>
+      <button class="lbl issue"      data-label="issue"      title="A problem that needs addressing">issue</button>
+    </div>
+    <textarea rows="2" placeholder="Your comment..." autofocus></textarea>
+    <div class="ann-actions">
+      <button id="ann-cancel">Cancel</button>
+      <button id="ann-save">Save</button>
+    </div>`;
+  wrapper.after(noteBox);
+  // Pre-activate default label
+  noteBox.querySelector('.lbl.nit').classList.add('active');
+
+  // Copy selection to clipboard
+  noteBox.querySelector('#ann-copy').addEventListener('click', () => {
+    navigator.clipboard.writeText(selectedText).then(() => {
+      const btn = noteBox.querySelector('#ann-copy');
+      btn.textContent = 'Copied!';
+      btn.classList.add('copied');
+      setTimeout(() => { btn.textContent = 'Copy'; btn.classList.remove('copied'); }, 1500);
+    });
+  });
+
+  // Label pill toggle
+  noteBox.querySelectorAll('.lbl').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const lbl = btn.dataset.label;
+      if (selectedLabel === lbl) {
+        selectedLabel = null;
+        noteBox.querySelectorAll('.lbl').forEach(b => b.classList.remove('active'));
+      } else {
+        selectedLabel = lbl;
+        noteBox.querySelectorAll('.lbl').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+      }
+    });
+  });
+
+  const ta = noteBox.querySelector('textarea');
+  setTimeout(() => ta.focus(), 50);
+
+  const removeHighlight = () => { noteBox.remove(); wrapper.replaceWith(...wrapper.childNodes); };
+
+  noteBox.querySelector('#ann-cancel').addEventListener('click', removeHighlight);
+
+  noteBox.querySelector('#ann-save').addEventListener('click', () => {
+    const comment = ta.value.trim();
+    if (!comment) { removeHighlight(); return; }
+    annotations.push({
+      id,
+      selectedText,
+      comment,
+      label: selectedLabel,
+      lineStart: meta.lineStart,
+      lineEnd:   meta.lineEnd,
+      charStart: meta.charStart,
+      charEnd:   meta.charEnd,
+      contextHash: meta.lineStart !== null
+        ? computeContextHash(markdownLines, meta.lineStart, meta.lineEnd)
+        : null,
+    });
+    const labelHtml = selectedLabel
+      ? `<span class="ann-label ${selectedLabel}">${selectedLabel}</span>`
+      : '';
+    const locHtml = locationText
+      ? `<span style="font-size:10px;color:#6c7086;margin-right:6px">${locationText}</span>`
+      : '';
+    noteBox.outerHTML = buildAnnotationNoteHtml({
+      id, label: selectedLabel, lineStart: meta.lineStart, lineEnd: meta.lineEnd, comment
+    });
+    updateAnnCount();
+  });
+
+  ta.addEventListener('keydown', e => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); noteBox.querySelector('#ann-save').click(); }
+    if (e.key === 'Escape') { removeHighlight(); }
+  });
+  window.getSelection().removeAllRanges();
+  pendingRange = null;
+}
+
+// Esc closes any open annotation input
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') { document.querySelectorAll('[id=ann-input-box]').forEach(b => b.remove()); }
+});
+
+function deleteAnnotation(id) {
+  const idx = annotations.findIndex(a => a.id === id);
+  if (idx >= 0) annotations.splice(idx, 1);
+  document.querySelector(`.annotation-note[data-ann-id="${id}"]`)?.remove();
+  const span = document.querySelector(`.annotated[data-ann-id="${id}"]`);
+  if (span) span.replaceWith(...span.childNodes);
+  updateAnnCount();
+}
+window.deleteAnnotation = deleteAnnotation;
+
+function askAboutAnnotation(id) {
+  const ann = annotations.find(a => a.id === id);
+  if (!ann) return;
+  const loc = ann.lineStart !== null ? (ann.lineStart === ann.lineEnd ? `Line ${ann.lineStart}` : `Lines ${ann.lineStart}-${ann.lineEnd}`) : null;
+  const prefix = ann.label ? `**${ann.label}:** ` : '';
+  const token = ann.selectedText.replace(/\n/g, ' ').slice(0, 80);
+  const text = loc ? `${loc} - "${token}"\n${prefix}${ann.comment}` : `"${token}"\n${prefix}${ann.comment}`;
+  const input = document.getElementById('chat-input');
+  input.value = text;
+  input.style.height = 'auto';
+  input.style.height = Math.min(input.scrollHeight, 120) + 'px';
+  input.focus();
+  sendQuery();
+}
+window.askAboutAnnotation = askAboutAnnotation;
+
+function updateAnnCount() {
+  document.getElementById('ann-count').textContent =
+    annotations.length ? `${annotations.length} comment${annotations.length > 1 ? 's' : ''}` : '';
+}
+
+// --- Chat ---
+const msgs = document.getElementById('chat-messages');
+const input = document.getElementById('chat-input');
+const sendBtn = document.getElementById('send-btn');
+const status = document.getElementById('chat-status');
+let streaming = false;
+
+function addMsg(role, text) {
+  const div = document.createElement('div');
+  div.className = 'msg ' + role;
+  if (role === 'assistant') { div.innerHTML = marked.parse(text); } else { div.innerHTML = marked.parseInline(text); }
+  msgs.appendChild(div);
+  msgs.scrollTop = msgs.scrollHeight;
+  return div;
+}
+
+let sessionId = null;
+
+async function ensureSession() {
+  if (sessionId) return true;
+  const ctx = window.__MDREVIEW_CONTEXT__ || {};
+  if (!ctx.aiEnabled) return false;
+  try {
+    const r = await fetch('/api/ai/session', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ context: { mode: 'annotate' } })
+    });
+    if (!r.ok) { console.error('Session creation failed', await r.text()); return false; }
+    const data = await r.json();
+    sessionId = data.sessionId;
+    return true;
+  } catch (e) { console.error('Session creation error', e); return false; }
+}
+
+async function sendQuery() {
+  const prompt = input.value.trim();
+  if (!prompt || streaming) return;
+  input.value = '';
+  input.style.height = 'auto';
+  addMsg('user', prompt);
+  streaming = true; sendBtn.disabled = true; if (status) status.textContent = 'thinking...';
+  const assistantDiv = addMsg('assistant', '');
+  let fullText = '';
+  try {
+    if (!await ensureSession()) {
+      assistantDiv.textContent = 'AI chat is not available.';
+      return;
+    }
+    const res = await fetch('/api/ai/query', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId, prompt })
+    });
+    if (res.headers.get('content-type')?.includes('text/event-stream')) {
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          try {
+            const evt = JSON.parse(line.slice(6));
+            if (evt.type === 'text_delta') { fullText += evt.delta; assistantDiv.innerHTML = marked.parse(fullText); msgs.scrollTop = msgs.scrollHeight; }
+            else if (evt.type === 'error') { assistantDiv.className = 'msg error'; assistantDiv.textContent = evt.error; }
+          } catch {}
+        }
+      }
+    } else {
+      const data = await res.json();
+      assistantDiv.textContent = data.error || 'No response';
+      if (data.error) assistantDiv.className = 'msg error';
+    }
+  } catch (err) { assistantDiv.className = 'msg error'; assistantDiv.textContent = 'Error: ' + err.message; }
+  streaming = false; sendBtn.disabled = false; if (status) status.textContent = 'ready';
+  if (!fullText && assistantDiv.textContent === '') assistantDiv.remove();
+}
+window.sendQuery = sendQuery;
+
+sendBtn.addEventListener('click', sendQuery);
+input.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendQuery(); } });
+input.addEventListener('input', () => { input.style.height = 'auto'; input.style.height = Math.min(input.scrollHeight, 120) + 'px'; });
+
+// --- Build structured feedback ---
+function buildFeedback() {
+  let fb = "";
+  const sorted = [...annotations].sort((a, b) => (a.lineStart || 0) - (b.lineStart || 0));
+  for (const a of sorted) {
+    // Heading: line range + token snippet
+    const loc = a.lineStart !== null
+      ? (a.lineStart === a.lineEnd ? `Line ${a.lineStart}` : `Lines ${a.lineStart}-${a.lineEnd}`)
+      : null;
+    const token = a.selectedText.length <= 60
+      ? a.selectedText.replace(/\n/g, ' ')
+      : a.selectedText.slice(0, 57).replace(/\n/g, ' ') + '\u2026';
+    const charInfo = (a.charStart !== null && a.lineStart !== null)
+      ? ` (chars ${a.charStart}-${a.charEnd})`
+      : '';
+    fb += loc
+      ? `### ${loc}${charInfo} - "${token}"\n`
+      : `### "${token}"\n`;
+    // Label prefix
+    const prefix = a.label ? `**${a.label}:** ` : '';
+    fb += `${prefix}${a.comment}\n\n`;
+  }
+  return fb.trim();
+}
+
+// --- Submit Comments ---
+document.getElementById('submit-btn').addEventListener('click', async () => {
+  if (annotations.length === 0) {
+    if (!confirm('No comments to submit. Close anyway?')) return;
+    await fetch('/api/exit', { method: 'POST' });
+    document.body.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100vh;color:#6c7086;font-size:18px">Session closed.</div>';
+    tryClose();
+    return;
+  }
+  const fb = buildFeedback();
+  await fetch('/api/feedback', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ feedback: fb, annotations }) });
+  document.body.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100vh;color:#a6e3a1;font-size:18px">\u2713 Comments submitted. Return to terminal.</div>';
+  tryClose();
+});
+
+// --- Close ---
+function tryClose() {
+  // window.close() only works if the tab was opened via window.open().
+  // Try multiple approaches; fall through to showing the message.
+  setTimeout(() => {
+    try { window.close(); } catch {}               // standard
+    setTimeout(() => {
+      try { window.open('', '_self', '').close(); } catch {}  // chromium workaround
+      setTimeout(() => { window.location.replace('about:blank'); }, 300);
+    }, 300);
+  }, 400);
+}
+
+document.getElementById('close-btn').addEventListener('click', async () => {
+  await fetch('/api/exit', { method: 'POST' });
+  document.body.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100vh;color:#6c7086;font-size:18px">Session closed.</div>';
+  tryClose();
+});
+
+// Resize
+const handle = document.getElementById('resize-handle');
+const chatPanel = document.getElementById('chat-panel');
+let dragging = false;
+handle.addEventListener('mousedown', () => { dragging = true; document.body.style.cursor = 'col-resize'; document.body.style.userSelect = 'none'; });
+document.addEventListener('mousemove', e => { if (!dragging) return; chatPanel.style.width = Math.max(280, Math.min(document.body.clientWidth - e.clientX, 800)) + 'px'; });
+document.addEventListener('mouseup', () => { dragging = false; document.body.style.cursor = ''; document.body.style.userSelect = ''; });
+
+// Theme toggle
+const themeBtn = document.getElementById('theme-toggle');
+const savedTheme = localStorage.getItem('mreview-theme');
+if (savedTheme !== 'dark') document.body.classList.add('light');
+themeBtn.textContent = document.body.classList.contains('light') ? '\uD83C\uDF19' : '\u2600\uFE0F';
+themeBtn.addEventListener('click', () => {
+  document.body.classList.toggle('light');
+  const isLight = document.body.classList.contains('light');
+  themeBtn.textContent = isLight ? '\uD83C\uDF19' : '\u2600\uFE0F';
+  localStorage.setItem('mreview-theme', isLight ? 'light' : 'dark');
+});
+
+// Font size control — use a dynamic <style> tag so !important overrides
+// explicit px values on child elements
+const FONT_MIN = 8, FONT_MAX = 48, FONT_DEFAULT = 13;
+let fontSize = parseInt(localStorage.getItem('mreview-font') || FONT_DEFAULT);
+const fontStyle = document.createElement('style');
+fontStyle.id = 'mreview-font-style';
+document.head.appendChild(fontStyle);
+function applyFontSize(n) {
+  fontSize = Math.max(FONT_MIN, Math.min(FONT_MAX, n));
+  document.getElementById('font-size-val').textContent = fontSize;
+  fontStyle.textContent = '#chat-panel, #chat-panel *, #ann-input-box, #ann-input-box * { font-size: ' + fontSize + 'px !important; }';
+  localStorage.setItem('mreview-font', fontSize);
+}
+applyFontSize(fontSize);
+document.getElementById('font-dec').addEventListener('click', () => applyFontSize(fontSize - 1));
+document.getElementById('font-inc').addEventListener('click', () => applyFontSize(fontSize + 1));
+// Heartbeat
+setInterval(() => { fetch('/api/ai/capabilities').catch(() => {}); }, 30000);
+
+// Tab close
+window.addEventListener('beforeunload', () => { navigator.sendBeacon('/api/exit', '{}'); });
+</script>
+</body>
+</html>

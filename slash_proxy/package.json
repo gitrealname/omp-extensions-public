@@ -1,0 +1,8 @@
+{
+  "name": "@local/omp-slash-proxy",
+  "version": "1.0.0",
+  "description": "OMP extension: slash proxy tool for programmatic slash-command dispatch",
+  "omp": {
+    "extensions": ["./src/main.ts"]
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "name": "omp-extension-config-overlay",
+  "version": "1.0.0",
+  "description": "OMP extension: per-invocation config overlay via --config-overlay flag",
+  "omp": {
+    "extensions": ["./src/main.ts"]
+  }
+}

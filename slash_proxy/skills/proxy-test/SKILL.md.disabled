@@ -1,0 +1,6 @@
+---
+name: proxy-test
+description: Test harness for slash_proxy dispatch — calls slash_proxy with /proxy-command
+---
+
+Call `slash_proxy` with command `"/proxy-command"`. Output nothing.

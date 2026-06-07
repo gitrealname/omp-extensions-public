@@ -1,0 +1,10 @@
+{
+  "name": "@local/slash-proxy-tests",
+  "version": "1.0.0",
+  "description": "Integration tests for slash_proxy extension",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@agentclientprotocol/sdk": "^0.21.0"
+  }
+}
