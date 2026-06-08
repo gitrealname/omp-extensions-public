@@ -92,18 +92,17 @@ export default function (pi: ExtensionAPI): void {
             return;
         }
 
-        // Apply each key as a runtime override
-        let applied = 0;
-        for (const [key, value] of flatten(parsed)) {
-            try {
-                pi.pi.settings.override(key as never, value as never);
-                applied++;
-                dbg(log, `[config-overlay] override ${key} = ${JSON.stringify(value)}`);
-            } catch (err) {
-                log.warn(`[config-overlay] failed to override ${key}: ${err}`);
+        // Apply all overrides in a single transaction with hooks fired
+        const result = pi.pi.applyOverrides(
+            pi.pi.settings,
+            Object.fromEntries(flatten(parsed)),
+            { fireHooks: true },
+        );
+        if (result.skipped.length > 0) {
+            for (const s of result.skipped) {
+                log.warn(`[config-overlay] skipped ${s.key}: ${s.reason}`);
             }
         }
-
-        dbg(log, `[config-overlay] applied ${applied} override(s) from ${resolved}`);
+        dbg(log, `[config-overlay] applied ${result.applied.length} override(s) from ${resolved}`);
     });
 }
