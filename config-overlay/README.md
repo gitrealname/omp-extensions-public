@@ -86,6 +86,7 @@ The overlay is applied during `session_start`, **after** session creation.
 
 - `modelRoles.default` — model is resolved before `session_start` fires
 - Provider credentials — loaded at startup
+- UI settings with side-effect hooks (`theme.dark`, `display.tabWidth`, etc.) — `settings.override()` does not fire the hooks that `settings.set()` runs, so the UI won't update until the next session
 
 For eager settings, the core-level `--config-overlay` proposed in [issue #1733](https://github.com/can1357/oh-my-pi/issues/1733) is the proper solution — it applies the overlay in the `Settings` constructor before any subsystem initialization.
 

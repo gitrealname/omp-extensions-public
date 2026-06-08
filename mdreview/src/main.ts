@@ -14,6 +14,7 @@
 
 import { resolve as resolvePath } from "node:path";
 import { existsSync, readFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import type { ServerResponse } from "node:http";
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 import { startMdReviewServer, type MdReviewDecision } from "./server";
@@ -58,8 +59,6 @@ function formatDecision(decision: MdReviewDecision, filePath: string): string {
 	const lines: string[] = [`# Review: ${normalizedPath}`, ""];
 
 	if (rawFeedback) lines.push(rawFeedback);
-
-
 
 	lines.push("", "Please address the annotation feedback above.");
 	return lines.join("\n");
@@ -129,6 +128,9 @@ export default function mdreviewExtension(pi: ExtensionAPI): void {
 			activeSse = null;
 			isBrowserTurn = false;
 
+			// Security: per-session auth token for the local HTTP server
+			const token = randomUUID();
+
 			// Start server — non-blocking
 			try {
 				activeServer = await startMdReviewServer({
@@ -136,6 +138,7 @@ export default function mdreviewExtension(pi: ExtensionAPI): void {
 					filePath: resolvedPath,
 					htmlContent,
 					cwd: ctx.cwd,
+					token,
 					onAiQuery: (prompt, sseRes) => {
 						activeSse = sseRes;
 						isBrowserTurn = true;
@@ -145,28 +148,28 @@ export default function mdreviewExtension(pi: ExtensionAPI): void {
 							{ triggerTurn: true },
 						);
 					},
-				onActiveSseClosed: () => {
-					activeSse = null;
-					isBrowserTurn = false;
-				},
-				onDecision: (decision) => {
-					debug("decision received", { approved: decision.approved, exit: decision.exit });
-					activeServer?.stop();
-					activeServer = null;
-					activeSse = null;
-					isBrowserTurn = false;
-					ctx.ui.setStatus("mdreview", "");
-					if (decision.exit) {
-						ctx.ui.notify("Review session closed without feedback", "info");
-						return;
-					}
-					pi.sendMessage(
-						{ customType: "mdreview-feedback", content: formatDecision(decision, resolvedPath), display: true, attribution: "user" },
-						{ triggerTurn: true },
-					);
-				},
-				onNotify: (msg, type) => ctx.ui.notify(msg, type),
-				log: (msg) => debug(msg),
+					onActiveSseClosed: () => {
+						activeSse = null;
+						isBrowserTurn = false;
+					},
+					onDecision: (decision) => {
+						debug("decision received", { approved: decision.approved, exit: decision.exit });
+						activeServer?.stop();
+						activeServer = null;
+						activeSse = null;
+						isBrowserTurn = false;
+						ctx.ui.setStatus("mdreview", "");
+						if (decision.exit) {
+							ctx.ui.notify("Review session closed without feedback", "info");
+							return;
+						}
+						pi.sendMessage(
+							{ customType: "mdreview-feedback", content: formatDecision(decision, resolvedPath), display: true, attribution: "user" },
+							{ triggerTurn: true },
+						);
+					},
+					onNotify: (msg, type) => ctx.ui.notify(msg, type),
+					log: (msg) => debug(msg),
 				});
 			} catch (err) {
 				ctx.ui.notify(`mdreview: server failed to start: ${err instanceof Error ? err.message : String(err)}`, "error");

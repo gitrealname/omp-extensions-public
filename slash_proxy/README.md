@@ -1,4 +1,5 @@
 # slash_proxy — OMP Slash Command Bridge
+> **Experimental.** This extension injects commands via stdin patching, which depends on OMP internals and load order. A first-class `pi.commands.dispatch()` API is proposed upstream ([#1560](https://github.com/can1357/oh-my-pi/issues/1560)) — once available, this extension will be simplified or replaced.
 
 External OMP extension that lets the model invoke any registered slash command
 by calling a single tool. One line in a skill is enough to delegate complex,

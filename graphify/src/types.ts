@@ -55,6 +55,7 @@ export interface SendMessageOptions {
 /** Handle returned by anthropicProxyServer. */
 export interface ProxyHandle {
     port: number;
+    token: string;
     stop: () => number;
     getCount: () => { total: number; active: number };
 }

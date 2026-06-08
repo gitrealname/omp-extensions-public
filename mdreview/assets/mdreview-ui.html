@@ -170,11 +170,25 @@ body.light #resize-handle:hover { background: #1971c2; }
   </div>
 </div>
 
-<script>
 const annotations = [];
 let annCounter = 0;
 let filePath = '';
 let markdownLines = [];  // kept in sync after every render
+const TOKEN = (window.__MDREVIEW_CONTEXT__ || {}).token || '';
+// Build authenticated URL — appends ?t=TOKEN to every API request
+function tokenUrl(path) { return path + (path.includes('?') ? '&' : '?') + 't=' + encodeURIComponent(TOKEN); }
+// Sanitize HTML from marked.parse() — strip script/event-handler attributes
+function sanitize(html) {
+  const tmp = document.createElement('div');
+  tmp.innerHTML = html;
+  tmp.querySelectorAll('script,iframe,object,embed,form').forEach(el => el.remove());
+  tmp.querySelectorAll('*').forEach(el => {
+    for (const attr of [...el.attributes]) {
+      if (attr.name.startsWith('on') || attr.name === 'srcdoc') el.removeAttribute(attr.name);
+    }
+  });
+  return tmp.innerHTML;
+}
 
 // --- FNV-1a 32-bit hash (browser-safe, no crypto) ---
 function fnv1a(str) {
@@ -223,7 +237,7 @@ function buildAnnotationNoteHtml(ann) {
   return `<div class="annotation-note" data-ann-id="${ann.id}">
       <span class="ann-del" onclick="deleteAnnotation('${ann.id}')">&#x2715;</span>
       <span class="ann-ask" onclick="askAboutAnnotation('${ann.id}')">Send</span>
-      ${locHtml}${labelHtml}<span class="ann-text">&#x1F4AC; ${marked.parseInline(ann.comment)}</span>
+      ${locHtml}${labelHtml}<span class="ann-text">&#x1F4AC; ${sanitize(marked.parseInline(ann.comment))}</span>
     </div>`;
 }
 
@@ -266,7 +280,7 @@ function migrateAnnotations(newLines) {
 function renderWithLineNumbers(markdown) {
   const tokens = marked.lexer(markdown);
   let line = 1;
-  let html = '';
+fetch(tokenUrl('/api/doc-content')).then(r => r.json()).then(data => {
   for (const token of tokens) {
     const startLine = line;
     const newlines = (token.raw.match(/\n/g) || []).length;
@@ -280,11 +294,11 @@ function renderWithLineNumbers(markdown) {
   return html;
 }
 
-fetch('/api/doc-content').then(r => r.json()).then(data => {
+fetch(tokenUrl('/api/doc-content')).then(r => r.json()).then(data => {
   filePath = data.filePath;
   document.title = 'mreview - ' + filePath.split(/[\/\\]/).pop();
   markdownLines = data.markdown.split('\n');
-  document.getElementById('doc-content').innerHTML = renderWithLineNumbers(data.markdown);
+  document.getElementById('doc-content').innerHTML = sanitize(renderWithLineNumbers(data.markdown));
   // Subscribe to live file changes after initial load
   startDocWatch();
 }).catch(() => {
@@ -292,7 +306,7 @@ fetch('/api/doc-content').then(r => r.json()).then(data => {
 });
 
 function startDocWatch() {
-  const es = new EventSource('/api/doc-watch');
+  const es = new EventSource(tokenUrl('/api/doc-watch'));
   es.onmessage = (e) => {
     let payload;
     try { payload = JSON.parse(e.data); } catch { return; }
@@ -304,7 +318,7 @@ function startDocWatch() {
     // Re-render (annotation note DOM is wiped here; we re-inject survivors below)
     document.querySelectorAll('.annotated, #ann-input-box').forEach(el => el.replaceWith(...el.childNodes));
     document.querySelectorAll('.annotation-note').forEach(el => el.remove());
-    docPanel.querySelector('#doc-content').innerHTML = renderWithLineNumbers(payload.markdown);
+    docPanel.querySelector('#doc-content').innerHTML = sanitize(renderWithLineNumbers(payload.markdown));
     markdownLines = newLines;
     docPanel.scrollTop = scrollTop;
     // Relocate surviving annotations; drop those whose context changed too much
@@ -530,8 +544,8 @@ let streaming = false;
 
 function addMsg(role, text) {
   const div = document.createElement('div');
-  div.className = 'msg ' + role;
-  if (role === 'assistant') { div.innerHTML = marked.parse(text); } else { div.innerHTML = marked.parseInline(text); }
+    const r = await fetch(tokenUrl('/api/ai/session'), {
+  if (role === 'assistant') { div.innerHTML = sanitize(marked.parse(text)); } else { div.innerHTML = sanitize(marked.parseInline(text)); }
   msgs.appendChild(div);
   msgs.scrollTop = msgs.scrollHeight;
   return div;
@@ -544,7 +558,7 @@ async function ensureSession() {
   const ctx = window.__MDREVIEW_CONTEXT__ || {};
   if (!ctx.aiEnabled) return false;
   try {
-    const r = await fetch('/api/ai/session', {
+    const r = await fetch(tokenUrl('/api/ai/session'), {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ context: { mode: 'annotate' } })
     });
@@ -569,7 +583,7 @@ async function sendQuery() {
       assistantDiv.textContent = 'AI chat is not available.';
       return;
     }
-    const res = await fetch('/api/ai/query', {
+    const res = await fetch(tokenUrl('/api/ai/query'), {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ sessionId, prompt })
     });
@@ -587,7 +601,7 @@ async function sendQuery() {
           if (!line.startsWith('data: ')) continue;
           try {
             const evt = JSON.parse(line.slice(6));
-            if (evt.type === 'text_delta') { fullText += evt.delta; assistantDiv.innerHTML = marked.parse(fullText); msgs.scrollTop = msgs.scrollHeight; }
+            if (evt.type === 'text_delta') { fullText += evt.delta; assistantDiv.innerHTML = sanitize(marked.parse(fullText)); msgs.scrollTop = msgs.scrollHeight; }
             else if (evt.type === 'error') { assistantDiv.className = 'msg error'; assistantDiv.textContent = evt.error; }
           } catch {}
         }

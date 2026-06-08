@@ -2,7 +2,7 @@
 
 Community extensions for the [Oh My Pi](https://github.com/can1357/oh-my-pi) coding agent.
 
-> **Requires the [open-sdk fork](https://github.com/gitrealname/oh-my-pi)** of oh-my-pi. The open-sdk exposes OMP internals (`settings`, `complete`, model registry, etc.) via the `ExtensionAPI.pi` namespace. Stock OMP does not expose these APIs — extensions that depend on open-sdk will not load without it.
+> **Requires the [open-sdk fork](https://github.com/gitrealname/oh-my-pi)** of oh-my-pi. The open-sdk exposes OMP internals (`settings`, `complete`, model registry, etc.) via the `ExtensionAPI.pi` namespace. Stock OMP does not expose these APIs — extensions that depend on open-sdk will not load without it. The `pi.pi.*` surface is **unstable** — upstream changes may break it at any time. See [OPEN-SDK.md](https://github.com/gitrealname/oh-my-pi/blob/main/OPEN-SDK.md).
 
 ## Extensions
 
@@ -11,7 +11,7 @@ Community extensions for the [Oh My Pi](https://github.com/can1357/oh-my-pi) cod
 | [**config-overlay**](config-overlay/README.md) | Per-invocation settings overlay via `--config-overlay` CLI flag |
 | [**graphify**](graphify/README.md) | Knowledge graph extraction, querying, and community labeling |
 | [**mdreview**](mdreview/README.md) | Interactive markdown file review with annotation and AI chat |
-| [**slash_proxy**](slash_proxy/README.md) | Custom slash command proxy for OMP |
+| [**slash_proxy**](slash_proxy/README.md) | Custom slash command proxy for OMP ⚠️ *experimental* |
 
 ## How OMP extensions work
 

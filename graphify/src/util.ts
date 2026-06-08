@@ -24,42 +24,48 @@ export function graphifyOutDir(cwd: string): string {
 
 // ── Python interpreter detection ────────────────────────────────────────────
 // Mirrors skill Step 1: read shebang from graphify binary, fall back to python3.
-// Result cached in <graphify-out>/.graphify_python (matches skill convention).
-let _pythonCache: string | null = null;
-
+// Result cached per cwd in <graphify-out>/.graphify_python (matches skill convention).
+const _pythonCache = new Map<string, string>();
 export function detectPython(cwd: string): string {
-    if (_pythonCache) return _pythonCache;
-
+    const cached = _pythonCache.get(cwd);
+    if (cached) return cached;
     // Check if a previous graphify run already wrote the interpreter path.
-    const cached = join(graphifyOutDir(cwd), ".graphify_python");
-    if (existsSync(cached)) {
-        const p = readFileSync(cached, "utf-8").trim();
-        if (p) { _pythonCache = p; return p; }
+    const cachedFile = join(graphifyOutDir(cwd), ".graphify_python");
+    if (existsSync(cachedFile)) {
+        const p = readFileSync(cachedFile, "utf-8").trim();
+        if (p) { _pythonCache.set(cwd, p); return p; }
     }
-
     // Find graphify binary and read its shebang.
-    let python = "python3";
+    let python: string | null = null;
     const graphifyBin = Bun.which("graphify");
     if (graphifyBin) {
         try {
             const firstLine = readFileSync(graphifyBin, "utf-8").split("\n")[0];
             if (firstLine.startsWith("#!")) {
                 const candidate = firstLine.slice(2).trim();
-                // Only accept clean paths (no special chars except / \ . - _)
                 if (/^[a-zA-Z0-9/_\\.:-]+$/.test(candidate)) {
                     python = candidate;
                 }
             }
-        } catch { /* fall through to default */ }
+        } catch { /* fall through to fallback */ }
     }
-
+    // Fallback: Windows-friendly resolution chain
+    if (!python) {
+        const candidates = process.platform === "win32"
+            ? ["py -3", "python", "python3"]
+            : ["python3", "python"];
+        for (const cmd of candidates) {
+            const bin = cmd.split(" ")[0];
+            if (Bun.which(bin)) { python = cmd; break; }
+        }
+        if (!python) python = "python3";
+    }
     // Persist for subsequent steps (matches skill convention).
     try {
         mkdirSync(graphifyOutDir(cwd), { recursive: true });
-        writeFileSync(cached, python, "utf-8");
+        writeFileSync(cachedFile, python, "utf-8");
     } catch { /* non-fatal */ }
-
-    _pythonCache = python;
+    _pythonCache.set(cwd, python);
     return python;
 }
 
@@ -176,8 +182,7 @@ export async function runGraphify(
         !(a === "deep" && argv[i - 1] === "--mode") &&
         a !== "--mode=deep"
     );
-    let proxy: { port: number; stop: () => number } | null = null;
-
+    let proxy: { port: number; token: string; stop: () => number } | null = null;
     if (isExtractionCmd && !hasBackend) {
         if (!ctx.model) {
             dbg(log, "[graphify] no model on ctx — running AST only");
@@ -186,7 +191,7 @@ export async function runGraphify(
                 proxy = await createProxy(pi, ctx, deepMode);
                 if (proxy) {
                     env.ANTHROPIC_BASE_URL = `http://localhost:${proxy.port}`;
-                    env.ANTHROPIC_API_KEY = "omp-internal";
+                    env.ANTHROPIC_API_KEY = proxy.token;
                     dbg(log, `[graphify] proxy active port=${proxy.port}`);
                 } else {
                     dbg(log, "[graphify] proxy not available — extract runs without OMP LLM routing");

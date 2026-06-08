@@ -1,7 +1,11 @@
 // ── Anthropic proxy server ───────────────────────────────────────────────────
 // Local Bun.serve that translates Anthropic Messages API → OMP complete().
 // The `complete` function is injected by main.ts (avoids duplicating open-sdk import).
-
+//
+// Security: generates a random bearer token on start. The caller passes it as
+// ANTHROPIC_API_KEY to the subprocess — the Python graphify CLI sends it as
+// Authorization: Bearer <token> on every request. Validates on each fetch.
+import { randomUUID } from "node:crypto";
 import { resolveExtractionModel, dbg } from "./util";
 import type { CompleteFn, CommandContext, PiLogger, ProxyHandle } from "./types";
 
@@ -50,7 +54,10 @@ export async function anthropicProxyServer(
         return null;
     }
 
-    dbg(log, `[graphify proxy] starting model=${model?.id ?? "none"}`);
+    // Security: generate a random bearer token for this proxy session.
+    // The caller passes it as ANTHROPIC_API_KEY to the subprocess.
+    const token = randomUUID();
+    dbg(log, `[graphify proxy] starting model=${model?.id ?? "none"} token=${token.slice(0, 8)}...`);
 
     let activeCount = 0;
     let chunkCount = 0;
@@ -87,6 +94,11 @@ export async function anthropicProxyServer(
     const server = Bun.serve({
         port: 0,
         async fetch(req: Request) {
+            // Security: validate bearer token on every request
+            const authHeader = req.headers.get("authorization") ?? "";
+            if (authHeader !== `Bearer ${token}`) {
+                return new Response("forbidden", { status: 403 });
+            }
             const url = new URL(req.url);
             if (req.method !== "POST" || !url.pathname.endsWith("/messages")) {
                 return new Response("not found", { status: 404 });
@@ -143,6 +155,7 @@ export async function anthropicProxyServer(
     dbg(log, `[graphify proxy] server ready port=${server.port}`);
     return {
         port: server.port,
+        token,
         stop: () => { server.stop(true); return chunkCount; },
         getCount: () => ({ total: chunkCount, active: activeCount }),
     };
