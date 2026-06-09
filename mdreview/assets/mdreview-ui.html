@@ -169,7 +169,7 @@ body.light #resize-handle:hover { background: #1971c2; }
     <button id="send-btn">Send</button>
   </div>
 </div>
-
+<script>
 const annotations = [];
 let annCounter = 0;
 let filePath = '';
@@ -280,7 +280,7 @@ function migrateAnnotations(newLines) {
 function renderWithLineNumbers(markdown) {
   const tokens = marked.lexer(markdown);
   let line = 1;
-fetch(tokenUrl('/api/doc-content')).then(r => r.json()).then(data => {
+  let html = '';
   for (const token of tokens) {
     const startLine = line;
     const newlines = (token.raw.match(/\n/g) || []).length;
@@ -544,7 +544,7 @@ let streaming = false;
 
 function addMsg(role, text) {
   const div = document.createElement('div');
-    const r = await fetch(tokenUrl('/api/ai/session'), {
+  div.className = `msg ${role}`;
   if (role === 'assistant') { div.innerHTML = sanitize(marked.parse(text)); } else { div.innerHTML = sanitize(marked.parseInline(text)); }
   msgs.appendChild(div);
   msgs.scrollTop = msgs.scrollHeight;
