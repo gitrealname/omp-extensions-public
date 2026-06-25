@@ -1,8 +1,8 @@
 # graphify OMP Extension
 > **Requires the [gitrealname/oh-my-pi](https://github.com/gitrealname/oh-my-pi) fork.**
-> This extension uses `pi.pi.complete` and other open-sdk exports that are not available in upstream OMP.
+> This extension uses `pi.openSdk.complete` and other open-sdk exports that are not available in upstream OMP.
 > The fork adds thin re-exports of internal APIs (LLM calls) that extensions
-> can access at runtime via `ExtensionAPI.pi` — see [OPEN-SDK.md](https://github.com/gitrealname/oh-my-pi/blob/main/OPEN-SDK.md).
+> can access at runtime via `ExtensionAPI.openSdk` — see [OPEN-SDK.md](https://github.com/gitrealname/oh-my-pi/blob/main/OPEN-SDK.md).
 
 Integrates the [graphify](https://pypi.org/project/graphifyy/) knowledge-graph tool into OMP as a first-class slash command. On session start (or after the first `search`/`find` tool result) the extension injects a steering hint when a graph is present. The `/graphify` command delegates to the Python `graphify` subprocess for all sub-commands. For LLM-powered extraction calls the extension optionally spins up a local HTTP proxy that intercepts Anthropic API requests from the Python process and routes them through OMP's in-process model, giving extraction jobs access to the session's credentials and model configuration without extra API keys.
 

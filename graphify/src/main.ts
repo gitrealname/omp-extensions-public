@@ -80,8 +80,8 @@ function label(pi: { logger: PiLogger }, ctx: CommandContext, targetPath: string
 // ── extension factory ────────────────────────────────────────────────────────
 
 export default function (pi: ExtensionAPI): void {
-    // Get complete from pi.pi — all open-sdk exports are on the module namespace.
-    complete = pi.pi.complete as CompleteFn;
+    // Get complete from pi.openSdk — clean namespace for open-sdk exports.
+    complete = pi.openSdk.complete as CompleteFn;
     const log = pi.logger;
     const onDemand = process.env.GRAPHIFY_ON_DEMAND === "1";
     let remindedThisSession = false;

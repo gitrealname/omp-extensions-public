@@ -2,7 +2,7 @@
 
 Community extensions for the [Oh My Pi](https://github.com/can1357/oh-my-pi) coding agent.
 
-> **Requires the [open-sdk fork](https://github.com/gitrealname/oh-my-pi)** of oh-my-pi. The open-sdk exposes OMP internals (`settings`, `complete`, model registry, etc.) via the `ExtensionAPI.pi` namespace. Stock OMP does not expose these APIs — extensions that depend on open-sdk will not load without it. The `pi.pi.*` surface is **unstable** — upstream changes may break it at any time. See [OPEN-SDK.md](https://github.com/gitrealname/oh-my-pi/blob/main/OPEN-SDK.md).
+> **Requires the [open-sdk fork](https://github.com/gitrealname/oh-my-pi)** of oh-my-pi. The open-sdk exposes OMP internals (`settings`, `complete`, model registry, etc.) via the `ExtensionAPI.openSdk` namespace. Stock OMP does not expose these APIs — extensions that depend on open-sdk will not load without it. See [OPEN-SDK.md](https://github.com/gitrealname/oh-my-pi/blob/main/OPEN-SDK.md).
 
 ## Extensions
 
@@ -66,7 +66,7 @@ The factory receives an `ExtensionAPI` instance and registers event handlers, co
 ## Requirements
 
 - [Oh My Pi](https://github.com/can1357/oh-my-pi) (upstream)
-- [open-sdk fork](https://github.com/gitrealname/oh-my-pi) (for extensions that use `pi.pi.*` APIs)
+- [open-sdk fork](https://github.com/gitrealname/oh-my-pi) (for extensions that use `pi.openSdk.*` APIs)
 - Some extensions have additional dependencies (e.g. graphify requires `graphifyy` Python package)
 
 ## License

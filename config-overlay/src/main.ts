@@ -58,7 +58,7 @@ export default function (pi: ExtensionAPI): void {
         if (!overlayArg) return;
 
         // Resolve path: absolute as-is, relative → agent dir (same as config.yml)
-        const agentDir = pi.pi.settings.getAgentDir();
+        const agentDir = pi.openSdk.settings.getAgentDir();
         const resolved = path.isAbsolute(overlayArg)
             ? overlayArg
             : path.join(agentDir, overlayArg);
@@ -93,8 +93,8 @@ export default function (pi: ExtensionAPI): void {
         }
 
         // Apply all overrides in a single transaction with hooks fired
-        const result = pi.pi.applyOverrides(
-            pi.pi.settings,
+        const result = pi.openSdk.applyOverrides(
+            pi.openSdk.settings,
             Object.fromEntries(flatten(parsed)),
             { fireHooks: true },
         );

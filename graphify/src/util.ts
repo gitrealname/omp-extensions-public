@@ -98,16 +98,16 @@ export function shellSplit(input: string): string[] {
 // ── Model resolution ────────────────────────────────────────────────────────
 // Resolves the model to use for extraction/labeling via:
 //   1. GRAPHIFY_MODEL_ROLE env var (role name, default "smol")
-//   2. modelRoles config lookup via pi.pi.settings
+//   2. modelRoles config lookup via pi.openSdk.settings
 //   3. ctx.model fallback
 
 export function resolveExtractionModel(
-    pi: { pi?: { settings?: { get(key: string): unknown } } },
+    pi: { openSdk?: { settings?: { get(key: string): unknown } } },
     ctx: CommandContext,
 ): ModelRef | undefined {
     const role = process.env.GRAPHIFY_MODEL_ROLE?.trim() ?? "smol";
     try {
-        const settings = pi.pi?.settings;
+        const settings = pi.openSdk?.settings;
         if (settings) {
             const modelRoles = settings.get("modelRoles") as Record<string, string> | undefined;
             if (modelRoles) {
