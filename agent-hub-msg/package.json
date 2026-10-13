@@ -1,0 +1,8 @@
+{
+  "name": "@local/omp-agent-hub-msg",
+  "version": "0.1.0",
+  "description": "OMP extension: email-style messaging between independent agent sessions (aliases, reply/reply-all, threaded inboxes)",
+  "omp": {
+    "extensions": ["./omp/main.ts"]
+  }
+}

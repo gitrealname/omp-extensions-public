@@ -1,0 +1,145 @@
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import {
+	allForMe,
+	deliverMail,
+	markDelivered,
+	markRead,
+	readMailbox,
+	readState,
+	resolveBody,
+	spoolBody,
+	unreadFor,
+	windowFrames,
+	type MailFrame,
+} from "../core/mailbox";
+
+let root: string;
+
+beforeEach(() => {
+	root = path.join(os.tmpdir(), `agent-hub-msg-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+	fs.mkdirSync(root, { recursive: true });
+});
+
+afterEach(() => {
+	fs.rmSync(root, { recursive: true, force: true });
+});
+
+let seq = 0;
+const frame = (from: string, to: string[], body = "hi", extra: Partial<MailFrame> = {}): MailFrame => ({
+	id: `m${++seq}`,
+	ts: new Date().toISOString(),
+	from,
+	to,
+	body,
+	...extra,
+});
+
+describe("mailbox", () => {
+	it("appends and reads frames; tolerates a torn tail", () => {
+		deliverMail(root, "a", frame("b", ["a"], "one"));
+		const second = frame("b", ["a"], "two");
+		deliverMail(root, "a", second);
+		// Simulate a concurrent append torn mid-line.
+		fs.appendFileSync(path.join(root, "inboxes", "a", "mbox.jsonl"), '{"id":"torn","from":"b"');
+		const { frames, indexById } = readMailbox(root, "a");
+		expect(frames.map(f => f.body)).toEqual(["one", "two"]);
+		expect(indexById.get(second.id)).toBe(1);
+	});
+
+	it("unreadFor filters by recipient, excludes self-mail, honors cursor", () => {
+		const forA = frame("b", ["a"], "for-a");
+		deliverMail(root, "a", forA);
+		deliverMail(root, "a", frame("b", ["c"], "for-c"));
+		deliverMail(root, "a", frame("a", ["a"], "self")); // echoed self-mail ignored
+		deliverMail(root, "a", frame("b", ["a", "c"], "broadcast"));
+		deliverMail(root, "a", frame("b", ["all"], "to-all"));
+
+		expect(unreadFor(root, "a", "a").map(f => f.body)).toEqual(["for-a", "broadcast", "to-all"]);
+
+		markDelivered(root, "a", [forA.id]);
+		expect(unreadFor(root, "a", "a").map(f => f.body)).toEqual(["broadcast", "to-all"]);
+	});
+
+	it("read state round-trips and readIds prune behind the cursor", () => {
+		const first = frame("b", ["a"]);
+		deliverMail(root, "a", first);
+		markRead(root, "a", first.id);
+		expect(readState(root, "a").readIds).toContain(first.id);
+		expect(unreadFor(root, "a", "a")).toHaveLength(0);
+		// Marking read twice is idempotent.
+		markRead(root, "a", first.id);
+		expect(readState(root, "a").readIds.filter(x => x === first.id)).toHaveLength(1);
+	});
+
+	it("allForMe returns everything addressed to me regardless of read state", () => {
+		const one = frame("b", ["a"], "one");
+		deliverMail(root, "a", one);
+		deliverMail(root, "a", frame("c", ["a"], "two"));
+		deliverMail(root, "a", frame("b", ["c"], "not-mine"));
+		markDelivered(root, "a", [one.id]);
+		expect(allForMe(root, "a", "a").map(f => f.body)).toEqual(["one", "two"]);
+	});
+});
+
+describe("inbox windowing", () => {
+	const deliverAt = (sid: string, from: string, iso: string, body: string) => {
+		const f = frame(from, [sid], body);
+		f.ts = iso;
+		deliverMail(root, sid, f);
+		return f;
+	};
+
+	it("since filters both views by timestamp", () => {
+		deliverAt("a", "b", "2026-10-01T10:00:00Z", "old");
+		const recent = deliverAt("a", "b", "2026-10-13T10:00:00Z", "new");
+		const sinceMs = Date.parse("2026-10-10T00:00:00Z");
+		expect(unreadFor(root, "a", "a", sinceMs).map(f => f.body)).toEqual(["new"]);
+		expect(allForMe(root, "a", "a", sinceMs).map(f => f.body)).toEqual(["new"]);
+		expect(allForMe(root, "a", "a").map(f => f.body)).toEqual(["old", "new"]);
+		expect(recent.ts).toBe("2026-10-13T10:00:00Z");
+	});
+
+	it("windowFrames keeps the most recent N and reports the total", () => {
+		const frames = Array.from({ length: 7 }, (_, i) => {
+			const f = frame("b", ["a"], `m${i}`);
+			f.ts = new Date(Date.UTC(2026, 9, 13, 10, 0, i)).toISOString();
+			return f;
+		});
+		const { selected, total } = windowFrames(frames, undefined, 3);
+		expect(total).toBe(7);
+		expect(selected.map(f => f.body)).toEqual(["m4", "m5", "m6"]); // most recent, order preserved
+		const empty = windowFrames(frames, Date.parse("2027-01-01T00:00:00Z"), 50);
+		expect(empty.selected).toHaveLength(0);
+		expect(empty.total).toBe(0);
+	});
+});
+
+describe("body spooling", () => {
+	it("short bodies pass through without a file", () => {
+		const r = spoolBody(root, "id1", "short");
+		expect(r).toEqual({ body: "short" });
+	});
+
+	it("long bodies are spooled verbatim to files/<id>.md with an excerpt in the frame", () => {
+		const long = "A".repeat(1000);
+		const r = spoolBody(root, "id2", long);
+		expect(r.bodyFile).toBe(path.join("files", "id2.md"));
+		expect(fs.readFileSync(path.join(root, "files", "id2.md"), "utf-8")).toBe(long);
+		expect(r.body.length).toBeLessThan(300);
+		expect(r.body.endsWith("… [full text: file]")).toBe(true);
+	});
+
+	it("resolveBody returns the spooled full text; missing file falls back", () => {
+		const long = "B".repeat(500);
+		const spooled = spoolBody(root, "id3", long);
+		const spooledFrame = frame("b", ["a"], spooled.body, { bodyFile: spooled.bodyFile });
+		expect(resolveBody(root, spooledFrame)).toBe(long);
+		const missing = frame("b", ["a"], "excerpt…", { bodyFile: "files/nope.md" });
+		expect(resolveBody(root, missing)).toContain("[body file missing");
+		const plain = frame("b", ["a"], "inline");
+		expect(resolveBody(root, plain)).toBe("inline");
+	});
+});
