@@ -141,6 +141,17 @@ therefore drives `/msg` through the RPC `prompt` frame, which `session.prompt`
 routes to extension commands natively. In TUI mode slash_proxy still works
 (raw `process.stdin.push`).
 
+## Inspecting without a session (CLI)
+
+Read-only CLI over the same mail root — what you see is what agents see:
+
+```bash
+bun run cli/msg.ts who                    # registry: sid, pid, age, aliases, PENDING count
+bun run cli/msg.ts inbox <sid|alias>      # every frame to that session (TOC)
+bun run cli/msg.ts read <sid|alias> <id>  # full body of one frame
+bun run cli/msg.ts pending <sid|alias>    # the reminder queue for that session
+```
+
 ## Known limits (v2)
 
 - Same machine only (registry carries a `machine` field for future transports)
@@ -151,3 +162,12 @@ routes to extension commands natively. In TUI mode slash_proxy still works
   bodies validated against a strict spool-path allowlist, sids/aliases format-checked,
   delivery attributed to "agent" (never "user"), untrusted-data wrapper + rule 10, ack
   clamp. Residual prompt-injection surface is inherent to plain-file mail between LLMs.
+  Posture: single machine, single user — these controls target *confused* agents
+  (prompt-injected repos) and accidents, not external attackers; no crypto.
+- **Alias policy**: a contested alias (two sessions claim it) **fails resolution** —
+  mail to it goes nowhere until the conflict is removed. There is deliberately no
+  steal/`--force`: reassignment means remove the alias from the old session and re-add
+  it on the new one (explicit act, inspectable in the registry).
+- **Backlog drain**: an offline backlog is delivered oldest-first, one sender-bundle
+  per turn. Weeks of mail would flood context (compaction → reminder churn) — no
+  windowing yet, deferred until a real backlog exists.
