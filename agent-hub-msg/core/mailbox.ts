@@ -51,7 +51,17 @@ export interface MailboxState {
 
 export const MAX_READ_IDS = 1000;
 
+/** Registry sids flow into filesystem paths — and registry.json is writable by
+ *  any local process. Enforce a safe shape at the boundary and defensively at
+ *  every path join. */
+const SID_RE = /^[A-Za-z0-9_-]{1,64}$/;
+
+export function validSid(sid: string): boolean {
+	return SID_RE.test(sid);
+}
+
 export function inboxDir(root: string, sid: string): string {
+	if (!SID_RE.test(sid)) throw new Error(`agent-hub-msg: invalid session id ${JSON.stringify(sid.slice(0, 80))}`);
 	return path.join(root, "inboxes", sid);
 }
 
@@ -117,15 +127,29 @@ export function spoolBody(root: string, id: string, body: string): { body: strin
 	};
 }
 
+/** Frames carry attacker-controllable fields — a spool reference must be a
+ *  generated path under files/, never an arbitrary location. */
+const SPOOL_RE = /^files[/\\][A-Za-z0-9_-]{1,64}\.md$/;
+const MAX_BODY_BYTES = 1_000_000;
+
 /**
  * Full text of a frame: the spool file's content when spooled, else the frame
  * body. Spool files are permanent (no-evict), so a backlog read days later
- * still resolves. A missing file falls back to the excerpt with a note.
+ * still resolves. A missing/invalid file falls back to the excerpt with a
+ * note. (An unvalidated bodyFile would splice ANY local file into the agent's
+ * context — e.g. bodyFile "../../…/.env".)
  */
 export function resolveBody(root: string, frame: MailFrame): string {
 	if (!frame.bodyFile) return frame.body;
+	if (!SPOOL_RE.test(frame.bodyFile)) {
+		return `${frame.body}\n[invalid body file reference: ${frame.bodyFile.slice(0, 80)}]`;
+	}
 	try {
-		return fs.readFileSync(path.join(root, frame.bodyFile), "utf-8");
+		const target = path.join(root, frame.bodyFile);
+		if (fs.statSync(target).size > MAX_BODY_BYTES) {
+			return `${frame.body}\n[body file too large (${frame.bodyFile})]`;
+		}
+		return fs.readFileSync(target, "utf-8");
 	} catch {
 		return `${frame.body}\n[body file missing: ${frame.bodyFile}]`;
 	}
@@ -134,10 +158,27 @@ export function resolveBody(root: string, frame: MailFrame): string {
 /** Append a frame to a session's mailbox. Creates the mailbox on first use. */
 export function deliverMail(root: string, sid: string, mail: MailFrame): void {
 	fs.mkdirSync(inboxDir(root, sid), { recursive: true });
-	fs.appendFileSync(mboxPath(root, sid), JSON.stringify(mail) + "\n", "utf-8");
+	// If the file ends mid-line (torn tail from a crashed writer), prefix a
+	// newline so the next frame isn't welded onto the partial JSON — which
+	// would turn a tolerated tail into a permanent corrupt middle line.
+	let payload = JSON.stringify(mail) + "\n";
+	try {
+		const stat = fs.statSync(mboxPath(root, sid));
+		if (stat.size > 0) {
+			const fd = fs.openSync(mboxPath(root, sid), "r");
+			try {
+				const buf = Buffer.alloc(1);
+				fs.readSync(fd, buf, 0, 1, stat.size - 1);
+				if (buf.toString("utf-8") !== "\n") payload = "\n" + payload;
+			} finally {
+				fs.closeSync(fd);
+			}
+		}
+	} catch {}
+	fs.appendFileSync(mboxPath(root, sid), payload, "utf-8");
 }
 
-/** Parse the whole mailbox; a torn trailing line is ignored. */
+/** Parse the whole mailbox; corrupt lines are skipped, never fatal. */
 export function readMailbox(root: string, sid: string): { frames: MailFrame[]; indexById: Map<string, number> } {
 	const frames: MailFrame[] = [];
 	const indexById = new Map<string, number>();
@@ -158,8 +199,10 @@ export function readMailbox(root: string, sid: string): { frames: MailFrame[]; i
 				frames.push(frame);
 			}
 		} catch {
-			if (i === lines.length - 1) break; // torn tail from a concurrent append
-			throw new Error(`agent-hub-msg: corrupt frame in ${mboxPath(root, sid)} line ${i + 1}`);
+			// Skip corrupt frames instead of throwing: a thrown readMailbox
+			// bricks delivery, msg_inbox, msg_reply, and reminders for this sid
+			// forever. A torn tail (crashed writer mid-append) lands here too.
+			continue;
 		}
 	}
 	return { frames, indexById };
@@ -215,15 +258,15 @@ export function windowFrames(
 
 /** Advance the delivery cursor past these frame indices and record read ids. */
 export function markDelivered(root: string, sid: string, ids: string[]): void {
-	const { indexById } = readMailbox(root, sid);
+	const { frames, indexById } = readMailbox(root, sid);
 	const state = readState(root, sid);
 	const readIds = new Set(state.readIds);
+	for (const id of ids) readIds.add(id);
+	// Advance only past frames PROVEN delivered. A max-over-bundle cursor would
+	// jump past interleaved frames from other senders (A,B,A → cursor=3 skips
+	// B at 1) and slice them out of unreadFor forever — silent mail loss.
 	let cursor = state.deliveredUpTo;
-	for (const id of ids) {
-		readIds.add(id);
-		const idx = indexById.get(id);
-		if (idx !== undefined && idx + 1 > cursor) cursor = idx + 1;
-	}
+	while (cursor < frames.length && readIds.has(frames[cursor].id)) cursor++;
 	writeState(root, sid, {
 		deliveredUpTo: cursor,
 		readIds: trimReadIds([...readIds], cursor, indexById),
@@ -248,7 +291,11 @@ export function markAnswered(root: string, sid: string, ids: string[]): void {
 	const state = readState(root, sid);
 	const answered = new Set(state.answeredIds);
 	for (const id of ids) answered.add(id);
-	writeState(root, sid, { ...state, answeredIds: [...answered] });
+	// Cap like readIds — a chatty session would otherwise grow state.json
+	// unboundedly. Ids are appended chronologically; the oldest drop first and
+	// those threads are long closed (no reminder can be affected).
+	const list = [...answered];
+	writeState(root, sid, { ...state, answeredIds: list.length > MAX_READ_IDS ? list.slice(list.length - MAX_READ_IDS) : list });
 }
 
 /**

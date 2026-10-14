@@ -15,6 +15,7 @@
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { validSid } from "./mailbox";
 
 /** lastSeen older than this ⇒ shown offline (entry kept). */
 export const STALE_MS = 5 * 60 * 1000;
@@ -61,11 +62,25 @@ function lockPath(root: string): string {
 export function withRegistryLock<T>(root: string, fn: () => T): T {
 	fs.mkdirSync(root, { recursive: true });
 	const lockFile = lockPath(root);
+	const marker = `${process.pid}`;
 	const deadline = Date.now() + LOCK_TIMEOUT_MS;
 	let fd: number | undefined;
 	for (;;) {
 		try {
 			fd = fs.openSync(lockFile, "wx");
+			try {
+				fs.writeFileSync(lockFile, marker, "utf-8");
+			} catch (err) {
+				// Don't leak the fd or strand an empty lock file (e.g. ENOSPC).
+				try {
+					fs.closeSync(fd);
+				} catch {}
+				fd = undefined;
+				try {
+					fs.rmSync(lockFile, { force: true });
+				} catch {}
+				throw err;
+			}
 			break;
 		} catch (err) {
 			const code = (err as NodeJS.ErrnoException).code;
@@ -93,8 +108,10 @@ export function withRegistryLock<T>(root: string, fn: () => T): T {
 		try {
 			if (fd !== undefined) fs.closeSync(fd);
 		} catch {}
+		// Delete only OUR lock: if a competitor already stole it (we slept past
+		// LOCK_STEAL_MS), removing unconditionally would unlock THEIR section.
 		try {
-			fs.rmSync(lockFile, { force: true });
+			if (fs.readFileSync(lockFile, "utf-8") === marker) fs.rmSync(lockFile, { force: true });
 		} catch {}
 	}
 }
@@ -102,10 +119,24 @@ export function withRegistryLock<T>(root: string, fn: () => T): T {
 // ── Read / write ─────────────────────────────────────────────────────────────
 
 function readRegistry(root: string): RegistryData {
+	let text: string;
 	try {
-		return JSON.parse(fs.readFileSync(registryPath(root), "utf-8")) as RegistryData;
+		text = fs.readFileSync(registryPath(root), "utf-8");
 	} catch {
-		return {};
+		return {}; // fresh root — no registry yet
+	}
+	try {
+		return JSON.parse(text) as RegistryData;
+	} catch (err) {
+		// NEVER fall back to a writable empty registry: the next mutation would
+		// atomically replace the file and silently erase every entry. Quarantine
+		// the corrupt file (fixed name — a fresh copy per failing call would
+		// accumulate on disk) and surface the failure instead.
+		const quarantine = `${registryPath(root)}.corrupt`;
+		try {
+			fs.copyFileSync(registryPath(root), quarantine);
+		} catch {}
+		throw new Error(`agent-hub-msg: corrupt ${registryPath(root)} — quarantined as ${quarantine} (${(err as Error).message})`);
 	}
 }
 
@@ -145,6 +176,9 @@ export interface SessionMeta {
  * the original registeredAt across reboots/restore of the same session id.
  */
 export function registerSession(root: string, sid: string, meta: SessionMeta, now = Date.now()): RegistryEntry {
+	// The registry is writable by any local process — a sid key like "../evil"
+	// would otherwise become an inboxDir path (directory escape).
+	if (!validSid(sid)) throw new Error(`agent-hub-msg: invalid session id ${JSON.stringify(sid.slice(0, 80))}`);
 	return withRegistryLock(root, () => {
 		const data = readRegistry(root);
 		const prev = data[sid];
@@ -184,9 +218,11 @@ export function addAlias(root: string, sid: string, alias: string, now = Date.no
 		if (!entry) throw new Error(`agent-hub-msg: session ${sid} is not registered`);
 		const owner = Object.entries(data).find(([other, e]) => other !== sid && e.aliases.some(a => a.toLowerCase() === alias.toLowerCase()));
 		if (owner) {
-			// Duplicate labels are allowed (the freshest owner wins resolution)
-			// but the user should know they set the same label twice.
-			return { aliases: entry.aliases, conflict: `${alias} is also set on ${owner[0]}` };
+			// Duplicate labels are allowed (advisory only), but a contested alias
+			// no longer resolves — resolveAddress fails until the conflict is
+			// removed, so mail addressed by that alias goes nowhere instead of
+			// to whichever session happened to heartbeat last.
+			return { aliases: entry.aliases, conflict: `${alias} is also set on ${owner[0]} — contested alias does not resolve; use session ids` };
 		}
 		if (!entry.aliases.some(a => a.toLowerCase() === alias.toLowerCase())) entry.aliases.push(alias);
 		entry.lastSeen = now;
@@ -239,9 +275,12 @@ export function resolveAddress(root: string, key: string, now = Date.now()): { a
 
 	const lower = want.toLowerCase();
 	const byAlias = sessions.filter(r => r.entry.aliases.some(a => a.toLowerCase() === lower));
-	if (byAlias.length > 0) {
-		byAlias.sort((a, b) => b.entry.lastSeen - a.entry.lastSeen);
-		return { address: byAlias[0] };
+	if (byAlias.length === 1) return { address: byAlias[0] };
+	if (byAlias.length > 1) {
+		// A contested alias must NOT resolve (lastSeen-wins would let whichever
+		// session heartbeated last silently receive the victim's mail).
+		const sids = byAlias.map(r => r.sid).join(", ");
+		return { error: `alias "${want}" is contested between ${sids} — use session ids` };
 	}
 
 	if (want.length >= 4) {

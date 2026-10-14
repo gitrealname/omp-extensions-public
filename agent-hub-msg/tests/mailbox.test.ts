@@ -212,3 +212,56 @@ describe("body spooling", () => {
 		expect(resolveBody(root, plain)).toBe("inline");
 	});
 });
+
+describe("delivery cursor with interleaved senders", () => {
+	it("advances only past delivered frames — no silent loss", () => {
+		const a1 = frame("peerA", ["me"], "a one");
+		const b1 = frame("peerB", ["me"], "b one");
+		const a2 = frame("peerA", ["me"], "a two");
+		for (const f of [a1, b1, a2]) deliverMail(root, "me", f);
+		// Bundle from peerA delivers first (frames a1, a2 non-adjacent).
+		markDelivered(root, "me", [a1.id, a2.id]);
+		const stillPending = unreadFor(root, "me", "me");
+		expect(stillPending.map(f => f.id)).toEqual([b1.id]); // B survived the cursor jump
+		markDelivered(root, "me", [b1.id]);
+		expect(unreadFor(root, "me", "me")).toHaveLength(0);
+	});
+});
+
+describe("mailbox robustness", () => {
+	it("skips corrupt non-final lines instead of throwing", () => {
+		const good1 = frame("p", ["me"], "one");
+		const good2 = frame("p", ["me"], "two");
+		fs.mkdirSync(path.join(root, "inboxes", "me"), { recursive: true });
+		fs.writeFileSync(
+			path.join(root, "inboxes", "me", "mbox.jsonl"),
+			`${JSON.stringify(good1)}\n{corrupt garbage line\n${JSON.stringify(good2)}\n`,
+			"utf-8",
+		);
+		const { frames } = readMailbox(root, "me");
+		expect(frames.map(f => f.id)).toEqual([good1.id, good2.id]);
+	});
+
+	it("appending onto a torn tail keeps both frames parseable", () => {
+		fs.mkdirSync(path.join(root, "inboxes", "me"), { recursive: true });
+		fs.writeFileSync(path.join(root, "inboxes", "me", "mbox.jsonl"), '{"id":"torn","from":"p"', "utf-8"); // crashed writer
+		const next = frame("p", ["me"], "after crash");
+		deliverMail(root, "me", next); // must not weld onto the partial JSON
+		const { frames } = readMailbox(root, "me");
+		expect(frames.map(f => f.id)).toEqual([next.id]);
+	});
+});
+
+describe("bodyFile validation", () => {
+	it("refuses traversal and absolute paths — no arbitrary file read", () => {
+		for (const bodyFile of ["../../../.env", "C:/secrets/x.md", "files/../../escape.md", "files/sub/dir.md"]) {
+			const out = resolveBody(root, frame("p", ["me"], "excerpt", { bodyFile }));
+			expect(out).toContain("[invalid body file reference");
+		}
+	});
+
+	it("accepts generated spool names", () => {
+		const spooled = spoolBody(root, "0123abcdef456789", "y".repeat(400));
+		expect(resolveBody(root, { ...frame("p", ["me"], ""), ...spooled })).toBe("y".repeat(400));
+	});
+});

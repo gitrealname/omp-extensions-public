@@ -9,6 +9,7 @@
  */
 import * as os from "node:os";
 import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 import { Type } from "@sinclair/typebox";
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 import { HubSession } from "../core/session";
@@ -23,7 +24,7 @@ function env(name: string): string | undefined {
 
 const MSG_ROOT = env("MSG_INBOX_ROOT") ?? path.join(os.homedir(), ".omp", "agent", "msg");
 // This file is <pkg>/omp/main.ts; the instructions file sits at the package root.
-const EXTENSION_DIR = path.resolve(path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1")), "..");
+const EXTENSION_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 const TOOL_NAMES = ["msg_send", "msg_reply", "msg_inbox", "msg_read", "msg_who"];
 
@@ -55,8 +56,9 @@ export default function agentHubMsgExtension(pi: ExtensionAPI): void {
 		env,
 		log: debug,
 		inject: (content, opts) => {
+			// Peer mail is never user-authored — attribute to "agent", not "user".
 			pi.sendMessage(
-				{ customType: opts.customType, content, display: opts.display, attribution: "user" },
+				{ customType: opts.customType, content, display: opts.display, attribution: "agent" },
 				...(opts.triggerTurn ? [{ triggerTurn: true }] : []),
 			);
 		},
@@ -229,8 +231,13 @@ export default function agentHubMsgExtension(pi: ExtensionAPI): void {
 		session.start();
 		// Same restore gap as session_switch: some resume paths fire
 		// session_start. Activation is a no-op unless instructed=true.
-		if (api.myself(MSG_ROOT, sessionIdFrom(ctx) ?? "").instructed) {
-			void session.activate(false).catch(() => {});
+		// Registry reads can throw (corrupt registry) — never crash the handler.
+		try {
+			if (api.myself(MSG_ROOT, sessionIdFrom(ctx) ?? "").instructed) {
+				void session.activate(false).catch(() => {});
+			}
+		} catch (err) {
+			pi.logger.debug?.(`[agent-hub-msg] restore check failed: ${err instanceof Error ? err.message : String(err)}`);
 		}
 	});
 
@@ -240,9 +247,14 @@ export default function agentHubMsgExtension(pi: ExtensionAPI): void {
 		session.register();
 		// A restored session whose history already contains mail instructions
 		// (instructed flag set by a previous boot) must reactivate — otherwise
-		// the LLM sees instructions but the tools are inactive.
-		if (api.myself(MSG_ROOT, sessionIdFrom(ctx) ?? "").instructed) {
-			void session.activate(false).catch(() => {});
+		// the LLM sees instructions but the tools are inactive. Registry reads
+		// can throw (corrupt registry) — never crash the handler.
+		try {
+			if (api.myself(MSG_ROOT, sessionIdFrom(ctx) ?? "").instructed) {
+				void session.activate(false).catch(() => {});
+			}
+		} catch (err) {
+			pi.logger.debug?.(`[agent-hub-msg] restore check failed: ${err instanceof Error ? err.message : String(err)}`);
 		}
 	});
 

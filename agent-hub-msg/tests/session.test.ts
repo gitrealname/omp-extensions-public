@@ -123,3 +123,51 @@ describe("HubSession pending reminders", () => {
 		expect(reg[SID].instructed).toBe(true);
 	});
 });
+
+describe("review hardening", () => {
+	it("deliverPending is reentrancy-safe during activation (no double injection)", async () => {
+		let releaseActivate: (() => void) | undefined;
+		const { session, injections } = makeSession({
+			activateTools: () => new Promise<void>(r => { releaseActivate = r; }),
+		});
+		// Deliver WITHOUT marking read — the delivery loop's own backlog.
+		const deliverOnly = (body: string): MailFrame => {
+			const f: MailFrame = { id: `m${Math.random().toString(36).slice(2, 10)}`, ts: new Date().toISOString(), from: PEER, to: [SID], body };
+			deliverMail(root, SID, f);
+			return f;
+		};
+		const a = deliverOnly("one");
+		const b = deliverOnly("two");
+		// Two entry paths race while activation is in flight.
+		const p1 = session.deliverPending();
+		const p2 = session.deliverPending();
+		await new Promise(r => setTimeout(r, 10));
+		releaseActivate!();
+		await Promise.all([p1, p2]);
+		const deliveries = injections.filter(i => i.opts.customType === "agent-hub-msg");
+		expect(deliveries).toHaveLength(1);
+		expect(deliveries[0].content).toContain(a.id);
+		expect(deliveries[0].content).toContain(b.id);
+	});
+
+	it("malformed MSG_POLL_MS/MSG_KEEPALIVE_MS fall back to defaults", () => {
+		const { session } = makeSession({ env: { MSG_POLL_MS: "15s", MSG_KEEPALIVE_MS: "abc" } });
+		const s = session as unknown as { pollMs: number; keepaliveEvery: number };
+		expect(s.pollMs).toBe(15_000);
+		expect(s.keepaliveEvery).toBe(4);
+	});
+
+	it("activation phrase requires a resolvable target", async () => {
+		const { session, injections } = makeSession();
+		session.maybeActivateByPhrase("check the mail server logs for errors");
+		session.maybeActivateByPhrase("rename the msg handler");
+		await new Promise(r => setTimeout(r, 20));
+		expect(injections).toHaveLength(0);
+
+		const { setUserAlias } = await import("../core/api");
+		setUserAlias(root, SID, "helper");
+		session.maybeActivateByPhrase("mail helper ping them");
+		await new Promise(r => setTimeout(r, 20));
+		expect(injections.some(i => i.opts.customType === "agent-hub-msg-instructions")).toBe(true);
+	});
+});

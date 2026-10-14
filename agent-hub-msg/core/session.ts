@@ -12,11 +12,15 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { batchBySender, formatBundle, type Bundle } from "./deliver";
 import { instructionsText, markInstructed, myself, pendingReminder, relativeAge, setUserAlias } from "./api";
-import { listSessions, registerSession, setInstructed, heartbeat as registryHeartbeat } from "./registry";
+import { listSessions, registerSession, resolveAddress, setInstructed, heartbeat as registryHeartbeat } from "./registry";
 import { markDelivered, resolveBody, setInlineMax, unreadFor } from "./mailbox";
 
-/** Phrases in user input that activate the mail tools ("email" does not match). */
-export const ACTIVATE_RE = /\b(?:mail|msg)\b/;
+/** Phrases in user input that activate the mail tools ("email" does not match).
+ *  The keyword alone is not enough — the following token must RESOLVE to a
+ *  registered session (alias or ≥4-char sid prefix) at activation time, so
+ *  "check the mail server logs" never injects mail instructions, while
+ *  "mail researcher ping them" does. */
+export const ACTIVATE_RE = /\b(?:mail|msg)\b[,: ]+([A-Za-z0-9_.-]+)/;
 
 export interface InjectOptions {
 	customType: string;
@@ -61,8 +65,14 @@ export class HubSession {
 	constructor(config: HubSessionConfig) {
 		this.config = config;
 		const env = config.env;
-		this.pollMs = Number(env("MSG_POLL_MS") ?? 15_000);
-		this.keepaliveEvery = Math.max(1, Math.round(Number(env("MSG_KEEPALIVE_MS") ?? 60_000) / this.pollMs));
+		// Malformed values must fall back to defaults: Number("15s") is NaN and
+		// setTimeout(fn, NaN) fires immediately → hot poll loop, and a NaN
+		// keepalive divisor means heartbeats never fire (session shows offline).
+		const poll = Number(env("MSG_POLL_MS") ?? 15_000);
+		this.pollMs = Number.isFinite(poll) && poll >= 1_000 ? poll : 15_000;
+		const keepalive = Number(env("MSG_KEEPALIVE_MS") ?? 60_000);
+		this.keepaliveEvery =
+			Number.isFinite(keepalive) && keepalive >= 1_000 ? Math.max(1, Math.round(keepalive / this.pollMs)) : 4;
 		const ff = (env("MSG_FAST_FOLLOW_MS") ?? "3000,6000,10000")
 			.split(",")
 			.map(s => Number(s.trim()))
@@ -88,18 +98,24 @@ export class HubSession {
 		return this.sid;
 	}
 
-	/** Register (or re-register) this session; seeds the configured alias. */
+	/** Register (or re-register) this session; seeds the configured alias.
+	 *  Never throws: event handlers call this synchronously, and a corrupt
+	 *  registry must not crash the session start path. */
 	register(): void {
 		if (!this.sid) return;
-		registerSession(this.config.root, this.sid, {
-			pid: this.config.pid ?? process.pid,
-			cwd: this.config.cwd,
-			machine: this.config.machine ?? os.hostname(),
-		});
-		if (this.config.seedAlias) {
-			setUserAlias(this.config.root, this.sid, this.config.seedAlias);
+		try {
+			registerSession(this.config.root, this.sid, {
+				pid: this.config.pid ?? process.pid,
+				cwd: this.config.cwd,
+				machine: this.config.machine ?? os.hostname(),
+			});
+			if (this.config.seedAlias) {
+				setUserAlias(this.config.root, this.sid, this.config.seedAlias);
+			}
+			this.config.log?.(`registered session ${this.sid} (root ${this.config.root})`);
+		} catch (err) {
+			this.config.log?.(`registration failed: ${err instanceof Error ? err.message : String(err)}`);
 		}
-		this.config.log?.(`registered session ${this.sid} (root ${this.config.root})`);
 	}
 
 	// ── Activation & instructions ────────────────────────────────────────────
@@ -125,10 +141,24 @@ export class HubSession {
 		this.config.log?.("instructions injected");
 	}
 
-	/** User-input hook: activate on phrases ("mail"/"msg"); failure is silent. */
+	/** User-input hook: activate on phrases ("mail <target> …"); failure is silent. */
 	maybeActivateByPhrase(text: string): void {
-		if (this.activated) return;
-		if (ACTIVATE_RE.test(text ?? "")) {
+		if (this.activated || !this.sid) return;
+		const match = ACTIVATE_RE.exec(text ?? "");
+		if (!match) return;
+		// The token after the keyword must resolve to a real session — bare
+		// "mail"/"msg" words in ordinary prose must not inject instructions.
+		// Registry reads can throw (corrupt registry.json) — never crash the
+		// input event handler for that.
+		const target = match[1];
+		let hit: ReturnType<typeof resolveAddress>["address"];
+		try {
+			hit = resolveAddress(this.config.root, target).address;
+		} catch (err) {
+			this.config.log?.(`activation address check failed: ${err instanceof Error ? err.message : String(err)}`);
+			return;
+		}
+		if (hit) {
 			void this.activate(false).catch(err =>
 				this.config.log?.(`activation failed: ${err instanceof Error ? err.message : String(err)}`),
 			);
@@ -168,9 +198,12 @@ export class HubSession {
 		if (pending.length === 0) return;
 		const bundles = batchBySender(pending);
 		const bundle: Bundle = bundles[0];
+		// Guard BEFORE activation: activate awaits a real harness round-trip,
+		// during which watch/poll/fast-follow ticks could otherwise each enter
+		// and inject the same bundle multiple times.
+		this.delivering = true;
 		// The agent needs the tools + instructions to reply — activate silently.
 		if (!this.activated) await this.activate(false).catch(() => {});
-		this.delivering = true;
 		try {
 			this.config.inject(
 				formatBundle(bundle, frame => resolveBody(this.config.root, frame), s => this.describe(s)),
@@ -185,12 +218,22 @@ export class HubSession {
 		}
 	}
 
+	/** Track a timer and drop it from the list once it fires (no unbounded growth). */
+	private trackTimer(callback: () => void, delay: number): ReturnType<typeof setTimeout> {
+		const t = setTimeout(() => {
+			const i = this.fastFollowTimers.indexOf(t);
+			if (i >= 0) this.fastFollowTimers.splice(i, 1);
+			callback();
+		}, delay);
+		t.unref?.();
+		this.fastFollowTimers.push(t);
+		return t;
+	}
+
 	/** A reply to our send often lands within seconds — check a few times fast. */
 	scheduleFastFollow(): void {
 		for (const delay of this.fastFollowDelays) {
-			const t = setTimeout(() => void this.deliverPending().catch(() => {}), delay);
-			t.unref?.();
-			this.fastFollowTimers.push(t);
+			this.trackTimer(() => void this.deliverPending().catch(() => {}), delay);
 		}
 	}
 
@@ -240,9 +283,7 @@ export class HubSession {
 		// Restore case: remind of mail delivered in a previous life but never
 		// answered. Deferred so registration/backlog delivery settles first;
 		// pending excludes undelivered backlog, so no double-injection.
-		const t = setTimeout(() => void this.remindPending().catch(() => {}), 2000);
-		t.unref?.();
-		this.fastFollowTimers.push(t);
+		this.trackTimer(() => void this.remindPending().catch(() => {}), 2000);
 	}
 
 	/** Stop everything. Registry entry, mailbox, and aliases persist (no-evict). */

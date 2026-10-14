@@ -174,3 +174,43 @@ describe("withRegistryLock", () => {
 		expect(() => withRegistryLock(root, () => "x")).toThrow(/timed out/);
 	});
 });
+
+describe("registry hardening", () => {
+	it("corrupt registry.json throws and is quarantined — never wiped", () => {
+		registerSession(root, "0197aaaaaaaaaaaa0000000000aa", { cwd: "C:/w/a", pid: process.pid, machine: "test" });
+		fs.writeFileSync(path.join(root, "registry.json"), "{not json", "utf-8");
+		expect(() => registerSession(root, "0197aaaaaaaaaaaa0000000000bb", { cwd: "C:/w/a", pid: process.pid, machine: "test" })).toThrow(/corrupt/);
+		const quarantined = fs.readdirSync(root).filter(f => f.includes(".corrupt"));
+		expect(quarantined).toHaveLength(1);
+		// Original corrupt file still present (not replaced by a 1-entry registry).
+		expect(fs.readFileSync(path.join(root, "registry.json"), "utf-8")).toBe("{not json");
+	});
+
+	it("contested alias fails resolution instead of lastSeen-wins", () => {
+		const cc = "0197aaaaaaaaaaaa0000000000cc";
+		const dd = "0197aaaaaaaaaaaa0000000000dd";
+		registerSession(root, cc, { cwd: "C:/w/a", pid: process.pid, machine: "test" });
+		registerSession(root, dd, { cwd: "C:/w/a", pid: process.pid, machine: "test" });
+		const dup = addAlias(root, dd, "shared"); // cc doesn't have it yet — succeeds
+		expect(dup.conflict).toBeUndefined();
+		addAlias(root, cc, "shared"); // second claim → conflict advisory
+		// Simulate contention as it can actually exist (legacy data / tampered
+		// registry): both entries carry the same alias.
+		const regPath = path.join(root, "registry.json");
+		const reg = JSON.parse(fs.readFileSync(regPath, "utf-8"));
+		reg[cc].aliases.push("shared");
+		fs.writeFileSync(regPath, JSON.stringify(reg), "utf-8");
+		const res = resolveAddress(root, "shared");
+		expect(res.address).toBeUndefined();
+		expect(res.error).toContain("contested");
+	});
+
+	it("lock file carries the owner pid; release deletes only the own marker", () => {
+		registerSession(root, "0197aaaaaaaaaaaa0000000000ee", { cwd: "C:/w/a", pid: process.pid, machine: "test" });
+		withRegistryLock(root, () => {
+			const content = fs.readFileSync(path.join(root, "registry.json.lock"), "utf-8");
+			expect(content).toBe(String(process.pid));
+		});
+		expect(fs.existsSync(path.join(root, "registry.json.lock"))).toBe(false);
+	});
+});

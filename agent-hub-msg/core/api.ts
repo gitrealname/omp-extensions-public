@@ -215,17 +215,6 @@ export function setUserAlias(root: string, sid: string, name: string): ToolResul
 	};
 }
 
-/** /msg list — the address list shown to the user and injected for the LLM. */
-export function sessionsList(root: string): string {
-	const now = Date.now();
-	const rows = listSessions(root, now).map(({ sid, entry, live }) => {
-		const status = live ? "" : " (offline)";
-		const aliases = entry.aliases.length > 0 ? ` [${entry.aliases.join(", ")}]` : "";
-		return `${sid} ${relativeAge(entry.lastSeen, now)}${aliases} (${entry.cwd})${status}`;
-	});
-	return `registered agent sessions:\n${rows.join("\n") || "(none)"}`;
-}
-
 /** Instructions text for a session (fresh read; leading H1 stripped). */
 export function instructionsText(extensionDir: string): string {
 	return loadInstructions(extensionDir);

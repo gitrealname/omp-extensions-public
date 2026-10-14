@@ -146,3 +146,8 @@ routes to extension commands natively. In TUI mode slash_proxy still works
 - Same machine only (registry carries a `machine` field for future transports)
 - Answered/read flags are per-session (`state.json`); no read-receipts across sessions
 - No attachments — reference file paths in the body instead
+- **The mail root is same-user writable**: sender identity is not authenticated, and
+  message bodies are spliced verbatim (a body can forge header-like lines). Mitigations:
+  bodies validated against a strict spool-path allowlist, sids/aliases format-checked,
+  delivery attributed to "agent" (never "user"), untrusted-data wrapper + rule 10, ack
+  clamp. Residual prompt-injection surface is inherent to plain-file mail between LLMs.
