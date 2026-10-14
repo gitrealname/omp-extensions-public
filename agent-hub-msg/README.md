@@ -11,9 +11,10 @@ No tmux, no cloud, no shared process — mailboxes are plain files under
 Two layers, so the mail fabric ports to any agent harness:
 
 - **`core/`** — the library. Registry, mailboxes, addressing, batching,
-  spooling, the `HubSession` delivery loop, and harness-neutral tool-shaped
-  entry points (`core/api.ts`). Zero harness dependencies (only Node/Bun
-  built-ins) — a CLI or another agent harness can use it as-is.
+  spooling, unanswered-mail tracking, the `HubSession` delivery loop,
+  slash-command completions (`core/commands.ts`), and harness-neutral
+  tool-shaped entry points (`core/api.ts`). Zero harness dependencies (only
+  Node/Bun built-ins) — a CLI or another agent harness can use it as-is.
 - **`omp/`** — the omp adapter: registers the `msg_*` tools and the `/msg`
   command, maps omp events onto `HubSession`, and adapts delivery to
   `pi.sendMessage`. ~250 lines; this is the only file to reimplement when
@@ -45,9 +46,12 @@ register automatically on start/restore under their session id; set the
 The LLM knows nothing about messaging until:
 
 - a **message arrives** (tools + instructions injected together with the mail), or
-- the **user initiates**: `/msg`, or any prompt containing "mail"/"msg"
-  (e.g. *"mail <sid|alias> ask how it is doing"*), or
-- `/msg instruct` after a compaction.
+- the **user initiates**: `/msg` (or any of its subcommands), or any prompt
+  containing "mail"/"msg" (e.g. *"mail <sid|alias> ask how it is doing"*), or
+- a **reminder fires**: unanswered delivered mail is re-injected after
+  compaction or on restore.
+- Restored sessions that were instructed in a previous boot reactivate
+  automatically (`instructed` flag).
 
 ## Commands
 
@@ -55,16 +59,31 @@ The LLM knows nothing about messaging until:
 |---|---|
 | `/msg` | Activate mail tools; inject instructions once |
 | `/msg instruct` | Force re-inject instructions (after compaction) |
-| `/msg list` | Show + inject `<session_id> <last_seen> [aliases] (cwd)` for all sessions |
+| `/msg list` | Show + inject `<session_id> pid <n> <last_seen> [aliases] (cwd)` for all sessions |
 | `/msg alias <name>` | Add an alias to this session (repeatable) |
+
+Every `/msg` command guarantees activation (tools + instructions on first
+contact); a doubled prefix (`/msg /msg list`) is tolerated. A flickering `pid`
+in `/msg list` between snapshots means two frontends share one session id
+(e.g. concurrent `-c`).
 
 ## Agent-side tools
 
 - `msg_who` — your address + every registered session (online/offline derived from last-seen; entries are never evicted)
-- `msg_send` — `to` (session id, unique prefix, alias, comma list, or `"all"`), `body`, optional `subject`, `inReplyTo`
-- `msg_reply` — **by message id only**; recipients are derived from the thread (`all: true` = reply-all)
+- `msg_send` — `to` (session id, unique prefix, alias, comma list, or `"all"`), `body`, optional `subject`, `inReplyTo`, `ack`
+- `msg_reply` — **by message id only**; recipients are derived from the thread (`all: true` = reply-all, ignored for acks)
 - `msg_inbox` — subjects + previews (never full bodies; `msg_read` pulls those); unread only by default, `{ read: true, since, limit }` for history
 - `msg_read` — full body of one message id
+
+**Acknowledgments & etiquette (extension-enforced):** bare acks are sent with
+`ack: true` and need no reply; acks always go to the sender only — `all` is
+ignored. Broadcast frames (multiple recipients) deliver with a
+"reply to the sender only" suffix so N×N ack storms cannot form.
+
+**Unanswered-mail reminders:** mail delivered but never answered
+(`answeredIds` in `state.json`) is re-injected after compaction and on
+restore (`triggerTurn`) so an agent that forgot — e.g. context compacted
+mid-task — wakes and answers. `ack: true` frames are exempt.
 
 Agent instructions live in [`agent-hub-msg-llm-instructions.md`](./agent-hub-msg-llm-instructions.md)
 (user-editable, read fresh at every injection; `MSG_INSTRUCTIONS` overrides the path).
@@ -94,20 +113,26 @@ Agent instructions live in [`agent-hub-msg-llm-instructions.md`](./agent-hub-msg
 | `MSG_POLL_MS` | `15000` | Mailbox poll interval |
 | `MSG_KEEPALIVE_MS` | `60000` | Registry heartbeat |
 | `MSG_INLINE_MAX` | `255` | Body chars before spooling to file |
+| `MSG_REMIND` | on | `off` disables unanswered-mail reminders |
+| `MSG_REMIND_MAX` | `5` | Max pending items in one reminder block |
 | `MSG_INSTRUCTIONS` | `<ext>/agent-hub-msg-llm-instructions.md` | LLM instructions file path |
 | `OMP_EXTENSION_DEBUG` | – | `1` enables debug logging |
 
 ## Testing
 
 ```bash
-bun test                 # unit tests (mailbox, registry, batching, spooling)
+bun test                 # unit tests (mailbox, registry, batching, spooling,
+                         # completions, reminder flow, ack suppression)
 bun tests/e2e-rpc.ts     # two real omp --mode rpc sessions exchange mail end to end
 ```
 
 The E2E driver verifies: sid-keyed registration with seeded aliases, alias
 addressing, auto-injected turns, reply-by-id, spool round-trip (>255-char body
-through `files/`), the instructed flags, and all `/msg` subcommands (sent as
-raw RPC prompts — extension commands execute locally, `agentInvoked: false`).
+through `files/`), the instructed flags, all `/msg` subcommands (sent as raw
+RPC prompts — extension commands execute locally, `agentInvoked: false`), the
+doubled-prefix tolerance, and real compaction (project settings shrink
+`compaction.keepRecentTokens`) proving the `session_compact` hook re-injects
+instructions on a live session.
 
 Note: `slash_proxy` cannot dispatch slash commands in RPC mode on omp
 v18.10.4+ — upstream claims the stdin singleton **before** extension
@@ -119,5 +144,5 @@ routes to extension commands natively. In TUI mode slash_proxy still works
 ## Known limits (v2)
 
 - Same machine only (registry carries a `machine` field for future transports)
-- No receipts/ack frames — delivered mail is marked read by the receiving poller
+- Answered/read flags are per-session (`state.json`); no read-receipts across sessions
 - No attachments — reference file paths in the body instead
