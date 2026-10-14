@@ -23,7 +23,13 @@ const DIR_A = path.join(ROOT, "alpha");
 const DIR_B = path.join(ROOT, "beta");
 const MAIL_ROOT = path.join(ROOT, "mail-root");
 
-for (const d of [DIR_A, DIR_B]) fs.mkdirSync(d, { recursive: true });
+for (const d of [DIR_A, DIR_B]) {
+	fs.mkdirSync(d, { recursive: true });
+	// Project-local settings: shrink the compaction keep-recent tail so the
+	// driver can trigger real compaction without first generating 20k tokens.
+	fs.mkdirSync(path.join(d, ".omp"), { recursive: true });
+	fs.writeFileSync(path.join(d, ".omp", "settings.json"), JSON.stringify({ compaction: { keepRecentTokens: 500 } }));
+}
 
 const env = (extra: Record<string, string>): Record<string, string> => ({
 	...(process.env as Record<string, string>),
@@ -162,6 +168,18 @@ class RpcClient {
 		if (result.agentInvoked !== false) {
 			throw new Error(`[${this.alias}] ${text} was not handled as a command (agentInvoked: ${result.agentInvoked})`);
 		}
+	}
+
+	/** Send a raw RPC command frame (no prompt_result); resolves on response. */
+	async rawCommand(type: string, timeoutMs = 180_000): Promise<any> {
+		const id = `raw-${Math.random().toString(36).slice(2)}`;
+		const responseP = this.wait("response", id, timeoutMs);
+		(this.proc.stdin as unknown as { write(data: string): number }).write(`${JSON.stringify({ id, type })}\n`);
+		const response = await responseP;
+		if (response && response.success === false) {
+			throw new Error(`[${this.alias}] ${type} failed: ${JSON.stringify(response).slice(0, 400)}`);
+		}
+		return response;
 	}
 
 	close(): void {
@@ -349,7 +367,15 @@ async function main(): Promise<void> {
 		console.log("✓ /msg instruct force re-injected instructions");
 
 
-		console.log("\nE2E PASS — full mail loop (sid addressing, aliases, spooling, reply-by-id, slash commands).");
+		// 11. compaction survival: force-compact A; the session_compact hook must
+		// re-inject instructions (count grows) without breaking anything.
+		console.log("A: RPC → compact (compaction survival check)");
+		const before = sessionText("alpha").split("Rules").length - 1;
+		await a.rawCommand("compact");
+		await waitFor(() => sessionText("alpha").split("Rules").length - 1 >= before + 1, "instructions re-injected after compaction", 180_000);
+		console.log("✓ compaction re-injected instructions (hook fired on live session)");
+
+		console.log("\nE2E PASS — full mail loop (sid addressing, aliases, spooling, reply-by-id, slash commands, compaction).");
 	} catch (err) {
 		console.error("E2E FAILED:", err instanceof Error ? err.message : err);
 		dumpDiagnostics(a, b);

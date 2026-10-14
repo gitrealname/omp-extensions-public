@@ -12,7 +12,9 @@ import {
 	allForMe,
 	deliverMail,
 	INLINE_MAX,
+	markAnswered,
 	markRead,
+	pendingFor,
 	readMailbox,
 	readState,
 	resolveBody,
@@ -75,6 +77,7 @@ function buildFrame(
 	body: string,
 	subject: string | undefined,
 	inReplyTo: string | undefined,
+	ack: boolean | undefined,
 ): MailFrame {
 	const parent = inReplyTo ? findFrame(root, me.sid, inReplyTo) : undefined;
 	if (inReplyTo && !parent) throw new Error(`message ${inReplyTo} not in this mailbox — reply only to mail you received`);
@@ -92,6 +95,7 @@ function buildFrame(
 		...(spooled.bodyFile ? { bodyFile: spooled.bodyFile } : {}),
 		...(subject ? { subject } : {}),
 		...(inReplyTo ? { inReplyTo } : {}),
+		...(ack ? { ack: true } : {}),
 		hops,
 	};
 }
@@ -101,14 +105,16 @@ function buildFrame(
 export function sendMail(
 	root: string,
 	me: Me,
-	params: { to: string; body: string; subject?: string; inReplyTo?: string },
+	params: { to: string; body: string; subject?: string; inReplyTo?: string; ack?: boolean },
 ): ToolResult {
 	const { to, skipped } = expandTo(root, params.to, me.sid);
 	const delivered: string[] = [];
 	if (to.length > 0) {
-		const frame = buildFrame(root, me, to, params.body, params.subject, params.inReplyTo);
+		const frame = buildFrame(root, me, to, params.body, params.subject, params.inReplyTo, params.ack);
 		for (const rcpt of to) deliverMail(root, rcpt, frame);
 		delivered.push(...to);
+		// A fresh send referencing an id counts as answering that message.
+		if (params.inReplyTo) markAnswered(root, me.sid, [params.inReplyTo]);
 	}
 	const parts = [
 		delivered.length > 0 ? `sent to: ${describeList(root, delivered, me.sid)}` : "not delivered",
@@ -120,7 +126,7 @@ export function sendMail(
 export function replyMail(
 	root: string,
 	me: Me,
-	params: { id: string; body: string; all?: boolean },
+	params: { id: string; body: string; all?: boolean; ack?: boolean },
 ): ToolResult {
 	const original = findFrame(root, me.sid, params.id);
 	if (!original || original.from === me.sid) {
@@ -130,8 +136,9 @@ export function replyMail(
 		? [...new Set([original.from, ...original.to])].filter(a => a !== me.sid && a !== "all")
 		: [original.from];
 	if (to.length === 0) return { text: "no recipients left to reply to" };
-	const frame = buildFrame(root, me, to, params.body, original.subject, params.id);
+	const frame = buildFrame(root, me, to, params.body, original.subject, params.id, params.ack);
 	for (const rcpt of to) deliverMail(root, rcpt, frame);
+	markAnswered(root, me.sid, [params.id]);
 	return {
 		text: `replied to ${describe(root, original.from, me.sid)}${params.all ? ` (all: ${describeList(root, to, me.sid)})` : ""}`,
 		details: { to },
@@ -225,6 +232,33 @@ export function instructionsText(extensionDir: string): string {
 /** Record that instructions were injected into this session's context. */
 export function markInstructed(root: string, sid: string): void {
 	setInstructed(root, sid, true);
+}
+
+/**
+ * Reminder block for delivered-but-unanswered mail, oldest first. Single
+ * item → full body spliced; several → headers + previews (msg_read for full
+ * text). Returns null when nothing is pending.
+ */
+export function pendingReminder(root: string, sid: string, max = 5): ToolResult | null {
+	const pending = pendingFor(root, sid, sid);
+	if (pending.length === 0) return null;
+	const selected = pending.slice(0, max);
+	const lines: string[] = [
+		`Mail reminder — ${pending.length === 1 ? "1 message" : `${pending.length} messages`} delivered earlier ${pending.length > selected.length ? `(showing ${selected.length} oldest) ` : ""}without an answer:`,
+		"",
+	];
+	for (const frame of selected) {
+		const from = describe(root, frame.from, sid);
+		const subject = frame.subject ? ` — ${frame.subject}` : "";
+		lines.push(`[mail from ${from}${subject} | id: ${frame.id}]`);
+		if (selected.length === 1) lines.push(resolveBody(root, frame).trimEnd());
+		else lines.push(`  ${frame.body.replace(/\n/g, " ").slice(0, 120)}${frame.body.length > 120 ? "…" : ""} (msg_read for full text)`);
+		lines.push("");
+	}
+	lines.push(
+		"These were delivered into this conversation before but appear unanswered — reply with msg_reply (use ack:true if nothing needs adding). Nothing pending can simply be dropped.",
+	);
+	return { text: lines.join("\n").trim(), details: { count: pending.length } };
 }
 
 export { INLINE_MAX };

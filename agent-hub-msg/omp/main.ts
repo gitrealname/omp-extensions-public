@@ -89,6 +89,7 @@ export default function agentHubMsgExtension(pi: ExtensionAPI): void {
 			body: Type.String(),
 			subject: Type.Optional(Type.String()),
 			inReplyTo: Type.Optional(Type.String({ description: "message id being replied to" })),
+			ack: Type.Optional(Type.Boolean({ description: "bare acknowledgment — no answer expected back" })),
 		}),
 		async execute(_id, params, _signal, _onUpdate, ctx) {
 			rememberSessionId(ctx);
@@ -108,6 +109,7 @@ export default function agentHubMsgExtension(pi: ExtensionAPI): void {
 			id: Type.String({ description: "message id being replied to" }),
 			body: Type.String(),
 			all: Type.Optional(Type.Boolean({ description: "reply-all instead of sender-only" })),
+			ack: Type.Optional(Type.Boolean({ description: "bare acknowledgment — no answer expected back" })),
 		}),
 		async execute(_id, params, _signal, _onUpdate, ctx) {
 			rememberSessionId(ctx);

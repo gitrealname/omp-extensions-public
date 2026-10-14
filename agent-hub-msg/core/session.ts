@@ -11,7 +11,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { batchBySender, formatBundle, type Bundle } from "./deliver";
-import { instructionsText, markInstructed, myself, relativeAge, setUserAlias } from "./api";
+import { instructionsText, markInstructed, myself, pendingReminder, relativeAge, setUserAlias } from "./api";
 import { listSessions, registerSession, setInstructed, heartbeat as registryHeartbeat } from "./registry";
 import { markDelivered, resolveBody, setInlineMax, unreadFor } from "./mailbox";
 
@@ -135,9 +135,27 @@ export class HubSession {
 		}
 	}
 
-	/** Post-compaction hook: re-inject instructions unconditionally. */
+	/** Post-compaction hook: re-inject instructions, then remind of pending mail. */
 	reinjectAfterCompact(): void {
-		if (this.activated && this.sid) void this.injectInstructions(true).catch(() => {});
+		if (!this.activated || !this.sid) return;
+		void this.injectInstructions(true)
+			.then(() => this.remindPending())
+			.catch(() => {});
+	}
+
+	/**
+	 * Delivered-but-unanswered mail: inject a reminder that wakes the agent up.
+	 * No-op when nothing is pending or reminders are disabled (MSG_REMIND=off).
+	 */
+	async remindPending(): Promise<void> {
+		if (this.stopped || !this.sid || this.config.env("MSG_REMIND")?.toLowerCase() === "off") return;
+		const max = Number(this.config.env("MSG_REMIND_MAX") ?? 5);
+		const reminder = pendingReminder(this.config.root, this.sid, Number.isFinite(max) ? max : 5);
+		if (!reminder) return;
+		// The agent needs the tools to answer — activate silently.
+		if (!this.activated) await this.activate(false).catch(() => {});
+		this.config.inject(reminder.text, { customType: "agent-hub-msg-reminder", display: true, triggerTurn: true });
+		this.config.log?.(`reminder injected (${reminder.details?.count} pending)`);
 	}
 
 	// ── Delivery ─────────────────────────────────────────────────────────────
@@ -219,6 +237,12 @@ export class HubSession {
 		this.register();
 		this.watchInboxes();
 		void this.poll();
+		// Restore case: remind of mail delivered in a previous life but never
+		// answered. Deferred so registration/backlog delivery settles first;
+		// pending excludes undelivered backlog, so no double-injection.
+		const t = setTimeout(() => void this.remindPending().catch(() => {}), 2000);
+		t.unref?.();
+		this.fastFollowTimers.push(t);
 	}
 
 	/** Stop everything. Registry entry, mailbox, and aliases persist (no-evict). */

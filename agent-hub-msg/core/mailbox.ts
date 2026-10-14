@@ -38,11 +38,15 @@ export interface MailFrame {
 	inReplyTo?: string;
 	/** Reply-chain depth for loop protection. */
 	hops?: number;
+	/** Bare acknowledgment — never demands a reply (pending check skips it). */
+	ack?: boolean;
 }
 
 export interface MailboxState {
 	deliveredUpTo: number;
 	readIds: string[];
+	/** Frame ids this session has replied to (or otherwise answered). */
+	answeredIds: string[];
 }
 
 export const MAX_READ_IDS = 1000;
@@ -66,9 +70,9 @@ function statePath(root: string, sid: string): string {
 export function readState(root: string, sid: string): MailboxState {
 	try {
 		const raw = JSON.parse(fs.readFileSync(statePath(root, sid), "utf-8")) as Partial<MailboxState>;
-		return { deliveredUpTo: raw.deliveredUpTo ?? 0, readIds: raw.readIds ?? [] };
+		return { deliveredUpTo: raw.deliveredUpTo ?? 0, readIds: raw.readIds ?? [], answeredIds: raw.answeredIds ?? [] };
 	} catch {
-		return { deliveredUpTo: 0, readIds: [] };
+		return { deliveredUpTo: 0, readIds: [], answeredIds: [] };
 	}
 }
 
@@ -223,6 +227,7 @@ export function markDelivered(root: string, sid: string, ids: string[]): void {
 	writeState(root, sid, {
 		deliveredUpTo: cursor,
 		readIds: trimReadIds([...readIds], cursor, indexById),
+		answeredIds: state.answeredIds,
 	});
 }
 
@@ -234,7 +239,36 @@ export function markRead(root: string, sid: string, id: string): void {
 	writeState(root, sid, {
 		deliveredUpTo: state.deliveredUpTo,
 		readIds: trimReadIds([...state.readIds, id], state.deliveredUpTo, indexById),
+		answeredIds: state.answeredIds,
 	});
+}
+
+/** Record that this session answered the given message ids. Idempotent. */
+export function markAnswered(root: string, sid: string, ids: string[]): void {
+	const state = readState(root, sid);
+	const answered = new Set(state.answeredIds);
+	for (const id of ids) answered.add(id);
+	writeState(root, sid, { ...state, answeredIds: [...answered] });
+}
+
+/**
+ * Delivered-but-unanswered mail addressed to me: consumed (in readIds), not
+ * yet answered, and not an ack (bare acknowledgments never demand a reply).
+ * This is what pending reminders are built from.
+ */
+export function pendingFor(root: string, sid: string, me: string): MailFrame[] {
+	const { frames } = readMailbox(root, sid);
+	const state = readState(root, sid);
+	const readIds = new Set(state.readIds);
+	const answered = new Set(state.answeredIds);
+	return frames.filter(
+		frame =>
+			frame.from !== me &&
+			(frame.to.includes(me) || frame.to.includes("all")) &&
+			readIds.has(frame.id) &&
+			!answered.has(frame.id) &&
+			!frame.ack,
+	);
 }
 
 function trimReadIds(readIds: string[], cursor: number, indexById: Map<string, number>): string[] {

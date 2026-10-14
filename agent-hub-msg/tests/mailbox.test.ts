@@ -5,8 +5,10 @@ import * as path from "node:path";
 import {
 	allForMe,
 	deliverMail,
+	markAnswered,
 	markDelivered,
 	markRead,
+	pendingFor,
 	readMailbox,
 	readState,
 	resolveBody,
@@ -114,6 +116,50 @@ describe("inbox windowing", () => {
 		const empty = windowFrames(frames, Date.parse("2027-01-01T00:00:00Z"), 50);
 		expect(empty.selected).toHaveLength(0);
 		expect(empty.total).toBe(0);
+	});
+});
+
+describe("answered flags and pending", () => {
+	it("markAnswered is idempotent and independent of read state", () => {
+		const m = frame("b", ["a"], "hello");
+		deliverMail(root, "a", m);
+		markDelivered(root, "a", [m.id]);
+		markAnswered(root, "a", [m.id]);
+		markAnswered(root, "a", [m.id]);
+		const state = readState(root, "a");
+		expect(state.answeredIds.filter(x => x === m.id)).toHaveLength(1);
+		// A later read-state write must not wipe the answered flag.
+		markRead(root, "a", "other-id");
+		expect(readState(root, "a").answeredIds).toContain(m.id);
+	});
+
+	it("pendingFor: delivered-not-answered is pending; answered and ack are not", () => {
+		const unanswered = frame("b", ["a"], "needs answer");
+		deliverMail(root, "a", unanswered);
+		markDelivered(root, "a", [unanswered.id]);
+		expect(pendingFor(root, "a", "a").map(f => f.id)).toEqual([unanswered.id]);
+
+		// Not yet delivered (still unread) is NOT pending — the delivery loop owns it.
+		const undelivered = frame("b", ["a"], "backlog");
+		deliverMail(root, "a", undelivered);
+		expect(pendingFor(root, "a", "a").map(f => f.id)).toEqual([unanswered.id]);
+
+		// A reply marks the original answered.
+		markAnswered(root, "a", [unanswered.id]);
+		expect(pendingFor(root, "a", "a")).toHaveLength(0);
+
+		// An ack frame never becomes pending.
+		const ack = frame("b", ["a"], "ok");
+		ack.ack = true;
+		deliverMail(root, "a", ack);
+		markDelivered(root, "a", [ack.id]);
+		expect(pendingFor(root, "a", "a")).toHaveLength(0);
+
+		// Self-mail never counts.
+		const self = frame("a", ["a"], "self");
+		deliverMail(root, "a", self);
+		markDelivered(root, "a", [self.id]);
+		expect(pendingFor(root, "a", "a")).toHaveLength(0);
 	});
 });
 
