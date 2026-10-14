@@ -13,6 +13,7 @@ import { Type } from "@sinclair/typebox";
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 import { HubSession } from "../core/session";
 import * as api from "../core/api";
+import { msgArgumentCompletions } from "../core/commands";
 
 // ── Configuration (env — no core settings changes) ───────────────────────────
 
@@ -174,18 +175,17 @@ export default function agentHubMsgExtension(pi: ExtensionAPI): void {
 
 	pi.registerCommand("msg", {
 		description: "Inter-agent mail: /msg | /msg instruct | /msg list | /msg alias <name>",
-		getArgumentCompletions: prefix => {
-			const options = ["", "instruct", "list", "alias "];
-			return options
-				.filter(o => o.startsWith(prefix))
-				.map(o => ({ value: `/msg ${o}`.trim(), label: `/msg ${o}`.trim(), description: o ? "" : "activate mail tools" }));
-		},
+		getArgumentCompletions: msgArgumentCompletions,
 		handler: async (args, ctx) => {
 			rememberSessionId(ctx);
-			const [sub, ...rest] = args.trim().split(/\s+/);
+			// Every /msg command guarantees tools + first-contact injection.
+			await session.activate(false).catch(() => {});
+			const tokens = args.trim().split(/\s+/).filter(Boolean);
+			// Tolerate a doubled family prefix: /msg /msg list, /msg msg list.
+			while (tokens.length > 1 && /^\/?msg$/i.test(tokens[0])) tokens.shift();
+			const [sub, ...rest] = tokens;
 			switch (sub ?? "") {
 				case "": {
-					await session.activate(false).catch(() => {});
 					ctx.ui.notify("agent-hub-msg: mail tools active", "info");
 					break;
 				}
@@ -195,7 +195,6 @@ export default function agentHubMsgExtension(pi: ExtensionAPI): void {
 					break;
 				}
 				case "list": {
-					await session.activate(false).catch(() => {});
 					const text = session.listText();
 					ctx.ui.notify(text, "info");
 					pi.sendMessage({ customType: "agent-hub-msg-list", content: text, display: true, attribution: "user" });

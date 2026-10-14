@@ -366,6 +366,16 @@ async function main(): Promise<void> {
 		await waitFor(() => sessionText("alpha").split("Rules").length >= 3, "/msg instruct re-injection", 30_000);
 		console.log("✓ /msg instruct force re-injected instructions");
 
+		// 10b. doubled prefix tolerated: /msg /msg list behaves like /msg list.
+		console.log("A: RPC prompt → /msg /msg list (doubled prefix)");
+		await a.command("/msg /msg list");
+		await waitFor(
+			() => sessionText("alpha").split("registered agent sessions:").length - 1 >= 2,
+			"doubled-prefix /msg /msg list injection",
+			30_000,
+		);
+		console.log("✓ /msg /msg list accepted (doubled prefix tolerated)");
+
 
 		// 11. compaction survival: force-compact A; the session_compact hook must
 		// re-inject instructions (count grows) without breaking anything.

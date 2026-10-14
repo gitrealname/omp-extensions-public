@@ -267,7 +267,11 @@ export class HubSession {
 		const rows = listSessions(this.config.root, now).map(({ sid, entry, live }) => {
 			const status = live ? "" : " (offline)";
 			const aliases = entry.aliases.length > 0 ? ` [${entry.aliases.join(", ")}]` : "";
-			return `${sid} ${relativeAge(entry.lastSeen, now)}${aliases} (${entry.cwd})${status}`;
+			// pid: live processes continue sessions via `-c`, so two frontends can
+			// share one sid — the registry keeps only the last registrant's pid,
+			// which makes a flickering pid the visible symptom of sharing.
+			const pid = entry.pid !== undefined ? ` pid ${entry.pid}` : "";
+			return `${sid}${pid} ${relativeAge(entry.lastSeen, now)}${aliases} (${entry.cwd})${status}`;
 		});
 		return `registered agent sessions:\n${rows.join("\n") || "(none)"}`;
 	}
