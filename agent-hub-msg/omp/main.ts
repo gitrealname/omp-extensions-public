@@ -227,12 +227,23 @@ export default function agentHubMsgExtension(pi: ExtensionAPI): void {
 	pi.on("session_start", (_event, ctx) => {
 		rememberSessionId(ctx);
 		session.start();
+		// Same restore gap as session_switch: some resume paths fire
+		// session_start. Activation is a no-op unless instructed=true.
+		if (api.myself(MSG_ROOT, sessionIdFrom(ctx) ?? "").instructed) {
+			void session.activate(false).catch(() => {});
+		}
 	});
 
 	// Resume/restore of an existing session file — same sid, possibly new pid.
 	pi.on("session_switch", (_event, ctx) => {
 		rememberSessionId(ctx);
 		session.register();
+		// A restored session whose history already contains mail instructions
+		// (instructed flag set by a previous boot) must reactivate — otherwise
+		// the LLM sees instructions but the tools are inactive.
+		if (api.myself(MSG_ROOT, sessionIdFrom(ctx) ?? "").instructed) {
+			void session.activate(false).catch(() => {});
+		}
 	});
 
 	// After compaction the instructions may be gone from context — re-inject.

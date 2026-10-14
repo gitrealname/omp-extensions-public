@@ -73,4 +73,20 @@ describe("formatBundle", () => {
 		const text = formatBundle({ from: "a", frames: [deep] }, f => f.body, s => s);
 		expect(text).toContain("deep thread");
 	});
+
+	it("broadcast frames get a reply-to-sender-only suffix; direct frames do not advertise all=true", () => {
+		const direct = frame("a", ["me"], "just you");
+		const directText = formatBundle({ from: "a", frames: [direct] }, f => f.body, s => s);
+		expect(directText).not.toContain("all=true");
+		expect(directText).toContain("reply with msg_reply");
+
+		const fanout = frame("a", ["me", "other1", "other2"], "to everyone");
+		const broadcastText = formatBundle({ from: "a", frames: [fanout] }, f => f.body, s => s);
+		expect(broadcastText).toContain("broadcast to 3 agents");
+		expect(broadcastText).toContain("reply to the sender only, never all=true");
+
+		const all = frame("a", ["all"], "to all");
+		const allText = formatBundle({ from: "a", frames: [all] }, f => f.body, s => s);
+		expect(allText).toContain("reply to the sender only");
+	});
 });

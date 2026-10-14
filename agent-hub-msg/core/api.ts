@@ -132,7 +132,9 @@ export function replyMail(
 	if (!original || original.from === me.sid) {
 		return { text: `message ${params.id} not found in this mailbox` };
 	}
-	const to = params.all
+	// Acks are private: they go to the sender only, never to the other thread
+	// members — even with all=true — or broadcast ack cycles storm everyone.
+	const to = params.all && !params.ack
 		? [...new Set([original.from, ...original.to])].filter(a => a !== me.sid && a !== "all")
 		: [original.from];
 	if (to.length === 0) return { text: "no recipients left to reply to" };

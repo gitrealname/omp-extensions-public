@@ -62,8 +62,14 @@ export function formatBundle(
 		lines.push(resolve(frame).trimEnd());
 		lines.push("");
 	}
+	const recipients = bundle.frames[0]?.to.filter(t => t !== "all") ?? [];
+	const broadcast = recipients.length > 1 || (bundle.frames[0]?.to.includes("all") ?? false);
+	const n = bundle.frames.length;
+	const count = n === 1 ? "1 message" : `${n} messages`;
 	lines.push(
-		`(${bundle.frames.length === 1 ? "1 message" : `${bundle.frames.length} messages`} from ${describe(bundle.from)} — reply with msg_reply using the id shown above (all=true to reply-all), or ignore.)`,
+		broadcast
+			? `(${count} from ${describe(bundle.from)} — broadcast to ${recipients.length || "several"} agents: reply to the sender only, never all=true.)`
+			: `(${count} from ${describe(bundle.from)} — reply with msg_reply using the id shown above, or ignore.)`,
 	);
 	return lines.join("\n").trim();
 }

@@ -163,6 +163,29 @@ describe("answered flags and pending", () => {
 	});
 });
 
+describe("ack fan-out suppression", () => {
+	it("ack replies go to the sender only even with all=true; non-ack replies fan out", () => {
+		const me = "0197aaaaaaaa7ff3c00000000003";
+		const peer = "0197aaaaaaaa7ff4c00000000004";
+		const other = "0197aaaaaaaa7ff5c00000000005";
+		// peer broadcast to me + other; both must receive the original.
+		const bc = frame(peer, [me, other], "broadcast hello");
+		deliverMail(root, me, bc);
+		deliverMail(root, other, bc);
+
+		// ack + all=true → suppression: only the sender hears the ack.
+		const { replyMail } = require("../core/api") as typeof import("../core/api");
+		replyMail(root, { sid: me }, { id: bc.id, body: "ok", ack: true, all: true });
+		expect(readMailbox(root, peer).frames.some(f => f.body === "ok")).toBe(true);
+		expect(readMailbox(root, other).frames.some(f => f.body === "ok")).toBe(false);
+
+		// non-ack + all=true → fan-out as usual.
+		replyMail(root, { sid: me }, { id: bc.id, body: "answer to everyone", all: true });
+		expect(readMailbox(root, peer).frames.some(f => f.body === "answer to everyone")).toBe(true);
+		expect(readMailbox(root, other).frames.some(f => f.body === "answer to everyone")).toBe(true);
+	});
+});
+
 describe("body spooling", () => {
 	it("short bodies pass through without a file", () => {
 		const r = spoolBody(root, "id1", "short");
