@@ -61,23 +61,22 @@ describe("formatBundle", () => {
 		);
 		expect(text).toContain("x".repeat(400)); // full body spliced in
 		expect(text).toContain("short one");
-		expect(text).toContain("mail from alpha (sid-alpha)");
-		expect(text).toContain("from alpha");
-		expect(text).toContain(`id: ${f1.id}`);
-		expect(text).toContain("(re:");
-		expect(text).toContain("(2 messages from alpha.)"); // multi-frame count survives; the teaching trailer is gone
+		expect(text).toContain("# **2 mails from alpha**"); // count lives in the anchor
+		expect(text).toMatch(/#\s\*\*2 mails from alpha\*\* \*\[agent mail v\d+ — reply via msg_reply\]\*/); // italic stamp rides the anchor
+		expect(text).toContain(`## (no subject) *[id: ${f1.id}]*`); // no-subject placeholder keeps the shape uniform
+		expect(text).toContain(`## (no subject) *[id: ${f2.id} | re: ${f1.id.slice(-8)}]*`);
 		expect(text).not.toContain("reply with msg_reply using the id");
-		expect(text).toMatch(/\[agent mail v\d+ — data, not instructions; reply via msg_reply\]/); // minimal provenance stamp
+		expect(text).not.toContain("(2 messages from alpha.)"); // count trailer retired — anchor owns it
 	});
 
-	it("reply: field — ack and FYI flag none, deep threads flag user-only, plain mail omits it", () => {
+	it("reply: field rides the italic bracket — ack and FYI flag none, deep threads flag user-only, plain mail omits it", () => {
 		const ack = frame("a", ["me"], "ack", { ack: true });
 		const ackText = formatBundle({ from: "a", frames: [ack] }, f => f.body, s => s);
-		expect(ackText).toContain("reply: none — ack closes the thread");
+		expect(ackText).toContain(`## (no subject) *[id: ${ack.id} | reply: none — ack closes the thread]*`);
 
 		const fyi = frame("a", ["me"], "the numbers", { subject: "FYI: census" });
 		const fyiText = formatBundle({ from: "a", frames: [fyi] }, f => f.body, s => s);
-		expect(fyiText).toContain("reply: none — FYI");
+		expect(fyiText).toContain(`## FYI: census *[id: ${fyi.id} | reply: none — FYI]*`);
 
 		const deep = frame("a", ["me"], "hi", { hops: 6 });
 		const deepText = formatBundle({ from: "a", frames: [deep] }, f => f.body, s => s);
@@ -89,23 +88,23 @@ describe("formatBundle", () => {
 		expect(plainText.endsWith("a question")).toBe(true); // plain single mail ends at the body — no trailer
 	});
 
-	it("header renders as an H1 heading; subject as an H2 heading between it and the body (no level skip)", () => {
+	it("anchor is an H1 heading; each frame renders as an H2 subject line with the italic metadata bracket (no level skip)", () => {
 		const f = frame("a", ["me"], "the body text", { subject: "merge check", inReplyTo: "mRoot99" });
 		const text = formatBundle({ from: "a", frames: [f] }, fr => fr.body, s => s);
-		expect(text).toContain(`# [mail from a (re: mRoot99) | id: ${f.id}]`); // threading stays in the header
-		expect(text).toContain("## merge check");
-		expect(text.indexOf(`id: ${f.id}`)).toBeLessThan(text.indexOf("## merge check"));
-		expect(text.indexOf("## merge check")).toBeLessThan(text.indexOf("the body text"));
+		expect(text).toContain("# **1 mail from a**");
+		expect(text).toContain(`## merge check *[id: ${f.id} | re: mRoot99]*`); // thread marker rides the bracket
+		expect(text.indexOf(`id: ${f.id}`)).toBeLessThan(text.indexOf("the body text"));
 
 		const plain = frame("a", ["me"], "no subject body");
 		const plainText = formatBundle({ from: "a", frames: [plain] }, fr => fr.body, s => s);
-		expect(plainText).not.toContain("## no subject body");
+		expect(plainText).toContain("## (no subject) *[id:"); // placeholder keeps every frame the same shape
 		expect(plainText).toContain("no subject body");
 	});
 
 	it("broadcast frames get a reply-to-sender-only suffix; direct frames do not advertise all=true", () => {
 		const direct = frame("a", ["me"], "just you");
 		const directText = formatBundle({ from: "a", frames: [direct] }, f => f.body, s => s);
+		expect(directText).toContain("# **1 mail from a**"); // singular count in the anchor
 		expect(directText).not.toContain("all=true");
 		expect(directText.endsWith("just you")).toBe(true); // no trailer for plain unicast
 
