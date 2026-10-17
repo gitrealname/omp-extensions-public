@@ -55,7 +55,7 @@ function header(frame: MailFrame, describe: (sid: string) => string): string {
 	const from = frame.fromAlias ? `${frame.fromAlias} (${frame.from})` : describe(frame.from);
 	const thread = frame.inReplyTo ? ` (re: ${threadOf(frame).slice(-8)})` : "";
 	const reply = replyField(frame);
-	return `[mail from ${from}${thread} | id: ${frame.id}${reply ? ` | ${reply}` : ""}]`;
+	return `# [mail from ${from}${thread} | id: ${frame.id}${reply ? ` | ${reply}` : ""}]`;
 }
 
 function threadOf(frame: MailFrame): string {
@@ -79,10 +79,11 @@ export function formatBundle(
 	);
 	for (const frame of bundle.frames) {
 		lines.push(header(frame, describe));
-		// Subject on its own bold markdown line — separates it from the body.
-		// Frames without a subject skip the line entirely (the (re:) thread
-		// marker stays in the header — threading is metadata, not prose).
-		if (frame.subject) lines.push(`**${frame.subject}**`);
+		// Subject on its own H2 markdown heading — visually separates it from
+		// the body. The renderer needs heading levels NOT to skip (H1 header →
+		// H2 subject). Frames without a subject skip the line entirely (the
+		// (re:) thread marker stays in the header — threading is metadata).
+		if (frame.subject) lines.push(`## ${frame.subject}`);
 		lines.push(resolve(frame).trimEnd());
 		lines.push("");
 	}
