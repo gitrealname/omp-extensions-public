@@ -87,7 +87,7 @@ function buildFrame(
 	if (inReplyTo && !parent) throw new Error(`message ${inReplyTo} not in this mailbox — reply only to mail you received`);
 	if (parent?.ack) {
 		throw new Error(
-			`message ${inReplyTo} is a bare ack — acks close the thread on both sides; never reply to an ack`,
+			`message ${inReplyTo} is a bare ack — acks close the thread on both sides; never reply to an ack. To add a verdict or follow-up, reply to the ORIGINAL message of that thread instead (siblings of an ack are fine), or start a new thread`,
 		);
 	}
 	const hops = nextHops(parent);

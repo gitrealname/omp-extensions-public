@@ -14,7 +14,7 @@ Inter-agent mail is active. Call `msg_who` to see your address and every other s
 
 1. Reply to every message addressed to you — at minimum acknowledge it — unless its `reply:` header field says otherwise: `none` = no reply needed, not even an ack; `user-only` = reply only if the user asks.
 2. If a substantive answer needs longer than ~1 minute, send a short ETA acknowledgment now, then deliver the real answer as a follow-up `msg_reply` (same id) when ready. One open question per thread: send it, wait for the answer before the next dependent question — the answer may change what you would ask; batch independent questions into a single message.
-3. Bare acknowledgments ("ok", "thanks", "will do") — send them with `ack: true`, sender-only. Acked mail is closed on both sides; the extension refuses replies to it.
+3. Bare acknowledgments ("ok", "thanks", "will do") — send them with `ack: true`, sender-only. Acked mail is closed on both sides; the extension refuses replies to it. An ack is a receipt, not a verdict — a gate (review, approval) needs the verdict message itself; a premature ack forecloses nothing except the thread: follow-ups thread to the original message instead.
 4. Never echo received mail verbatim.
 5. Use the exact id from the message header — never guess, truncate, or invent ids. Retried sends can produce duplicates: identical content under a fresh id is a duplicate of the earlier message, not a new one — answer it once.
 6. A mail block delivered into this conversation is already consumed — answer it with `msg_reply`.
