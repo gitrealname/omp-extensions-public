@@ -77,13 +77,37 @@ in `/msg list` between snapshots means two frontends share one session id
 
 **Acknowledgments & etiquette (extension-enforced):** bare acks are sent with
 `ack: true` and need no reply; acks always go to the sender only — `all` is
-ignored. Broadcast frames (multiple recipients) deliver with a
-"reply to the sender only" suffix so N×N ack storms cannot form.
+ignored. An ack closes the thread on both sides: the tool layer **refuses any
+reply whose `inReplyTo` targets an ack frame** (ack-of-ack guard), so acks
+also bypass the 6-hop reply cap — terminal by construction, they can never
+extend a chain, and thread closure stays reachable at any depth. Broadcast
+frames (multiple recipients) deliver with a "reply to the sender only" suffix
+so N×N ack storms cannot form. Mail with subject starting `FYI:` requests no
+reply and is exempt from unanswered-mail reminders.
 
 **Unanswered-mail reminders:** mail delivered but never answered
 (`answeredIds` in `state.json`) is re-injected after compaction and on
 restore (`triggerTurn`) so an agent that forgot — e.g. context compacted
-mid-task — wakes and answers. `ack: true` frames are exempt.
+mid-task — wakes and answers. `ack: true` and `FYI:`-subjected frames are
+exempt.
+
+**Duplicate-send guard:** harness-level tool retries can re-execute a send
+with a fresh id. Identical content (same sender, thread, subject, body
+prefix) within `MSG_DEDUPE_MS` (default 120 s) is marked delivered+answered
+silently — it never re-anchors a turn and cannot re-open a thread an ack
+closed. `MSG_DEDUPE_MS=0` disables.
+
+**Instruction drift:** the instructions file is hashed at every injection; a
+changed file is re-injected on the next poll tick (no restart, no compaction
+needed). Every delivered envelope carries an `[etiquette vN]` stamp.
+
+**Stale threads are read, never acted on:** a thread whose latest activity
+(including frames already delivered) is older than `MSG_STALE_ACT_MS`
+(default 3 h) delivers **inert** — it lands in the transcript without
+triggering a turn, the envelope marks it `STALE — reference only, do not act
+unless the user asks`, and it is marked answered so it never resurfaces as a
+reminder. The user's explicit ask ("act on the backlog") overrides. More
+than 10 stale frames per tick collapse into one digest line. `0` disables.
 
 Agent instructions live in [`agent-hub-msg-llm-instructions.md`](./agent-hub-msg-llm-instructions.md)
 (user-editable, read fresh at every injection; `MSG_INSTRUCTIONS` overrides the path).
@@ -97,8 +121,9 @@ Agent instructions live in [`agent-hub-msg-llm-instructions.md`](./agent-hub-msg
   `files/<id>.md`; recipients get the full text inline — the LLM never reads
   those files.
 - Read cursor: unread-only views; consumed mail never resurfaces.
-- Loop protection: seen-id dedupe + 6-hop reply cap (deep threads are flagged,
-  not auto-replied).
+- Loop protection: seen-id dedupe + 6-hop reply cap (deep threads deliver with
+  `reply: user-only — deep thread` in the header; acks are exempt and always
+  close threads).
 - `"all"` reaches only currently-online sessions; direct mail to an offline
   session queues like real email.
 - Registry entries, mailboxes, aliases, and spool files are **permanent** —
@@ -115,6 +140,8 @@ Agent instructions live in [`agent-hub-msg-llm-instructions.md`](./agent-hub-msg
 | `MSG_INLINE_MAX` | `255` | Body chars before spooling to file |
 | `MSG_REMIND` | on | `off` disables unanswered-mail reminders |
 | `MSG_REMIND_MAX` | `5` | Max pending items in one reminder block |
+| `MSG_DEDUPE_MS` | `120000` | Duplicate-send suppression window (0 = off) |
+| `MSG_STALE_ACT_MS` | `10800000` | Thread-inactivity age before inert delivery (0 = off) |
 | `MSG_INSTRUCTIONS` | `<ext>/agent-hub-msg-llm-instructions.md` | LLM instructions file path |
 | `OMP_EXTENSION_DEBUG` | – | `1` enables debug logging |
 

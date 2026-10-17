@@ -301,6 +301,8 @@ export function markAnswered(root: string, sid: string, ids: string[]): void {
 /**
  * Delivered-but-unanswered mail addressed to me: consumed (in readIds), not
  * yet answered, and not an ack (bare acknowledgments never demand a reply).
+ * FYI-subjected mail is likewise excluded — the etiquette exempts it from
+ * replies, so it must never surface as a reminder.
  * This is what pending reminders are built from.
  */
 export function pendingFor(root: string, sid: string, me: string): MailFrame[] {
@@ -314,8 +316,70 @@ export function pendingFor(root: string, sid: string, me: string): MailFrame[] {
 			(frame.to.includes(me) || frame.to.includes("all")) &&
 			readIds.has(frame.id) &&
 			!answered.has(frame.id) &&
-			!frame.ack,
+			!frame.ack &&
+			!isFyi(frame),
 	);
+}
+
+/** FYI-subjected mail requests no reply (etiquette rule 1b). */
+export function isFyi(frame: MailFrame): boolean {
+	return /^fyi\b/i.test(frame.subject ?? "");
+}
+
+/**
+ * Duplicate-delivery fingerprint: harness-level tool retries can re-execute a
+ * send after the result was already delivered, producing identical content
+ * under a FRESH snowflake id — downstream indistinguishable from a new
+ * message. Duplicate handoffs re-anchor turns; a duplicate ack can re-open a
+ * thread an ack already closed. Match on sender + thread + subject + body
+ * prefix within the retry window; returns the earlier frame when duplicated.
+ */
+export function duplicateOf(root: string, sid: string, frame: MailFrame, windowMs: number): MailFrame | undefined {
+	const key = dupKey(frame);
+	const ts = Date.parse(frame.ts);
+	for (const prior of readMailbox(root, sid).frames) {
+		if (prior.id === frame.id || prior.from !== frame.from) continue;
+		if (dupKey(prior) !== key) continue;
+		const priorTs = Date.parse(prior.ts);
+		if (!Number.isFinite(ts) || !Number.isFinite(priorTs)) continue;
+		if (Math.abs(ts - priorTs) <= windowMs) return prior;
+	}
+	return undefined;
+}
+
+function dupKey(frame: MailFrame): string {
+	return JSON.stringify([frame.from, frame.inReplyTo ?? "", frame.subject ?? "", frame.body.slice(0, 200)]);
+}
+
+/**
+ * Latest-activity timestamp per frame's thread (all mailbox frames supplied).
+ * A thread's hotness includes frames ALREADY delivered — an old message in a
+ * thread that received a fresh reply is hot. Parents living in another
+ * mailbox root the thread at their id. Cycle-safe.
+ */
+export function threadActivity(frames: readonly MailFrame[]): Map<string, number> {
+	const byId = new Map(frames.map(f => [f.id, f]));
+	const rootOf = (start: MailFrame): string => {
+		let cur: MailFrame = start;
+		const seen = new Set<string>();
+		while (cur.inReplyTo && !seen.has(cur.inReplyTo)) {
+			seen.add(cur.inReplyTo);
+			const parent = byId.get(cur.inReplyTo);
+			if (!parent) return cur.inReplyTo;
+			cur = parent;
+		}
+		return cur.id;
+	};
+	const rootTs = new Map<string, number>();
+	for (const f of frames) {
+		const ts = Date.parse(f.ts);
+		if (!Number.isFinite(ts)) continue;
+		const root = rootOf(f);
+		rootTs.set(root, Math.max(rootTs.get(root) ?? 0, ts));
+	}
+	const latest = new Map<string, number>();
+	for (const f of frames) latest.set(f.id, rootTs.get(rootOf(f)) ?? Date.parse(f.ts));
+	return latest;
 }
 
 function trimReadIds(readIds: string[], cursor: number, indexById: Map<string, number>): string[] {

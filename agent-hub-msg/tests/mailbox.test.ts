@@ -5,6 +5,8 @@ import * as path from "node:path";
 import {
 	allForMe,
 	deliverMail,
+	duplicateOf,
+	isFyi,
 	markAnswered,
 	markDelivered,
 	markRead,
@@ -184,6 +186,50 @@ describe("ack fan-out suppression", () => {
 		expect(readMailbox(root, peer).frames.some(f => f.body === "answer to everyone")).toBe(true);
 		expect(readMailbox(root, other).frames.some(f => f.body === "answer to everyone")).toBe(true);
 	});
+
+	it("tool layer refuses replies to ack frames (ack-of-ack guard)", () => {
+		const me = "0197aaaaaaaa7ff3c00000000003";
+		const peer = "0197aaaaaaaa7ff4c00000000004";
+		const original = frame(peer, [me], "question");
+		deliverMail(root, me, original);
+		// expandTo resolves recipients against the registry — register both sids
+		// so the sendMail path reaches buildFrame (where the ack guard lives).
+		const { registerSession } = require("../core/registry") as typeof import("../core/registry");
+		registerSession(root, me, { pid: 1, cwd: ".", machine: "t" });
+		registerSession(root, peer, { pid: 2, cwd: ".", machine: "t" });
+		const { replyMail, sendMail } = require("../core/api") as typeof import("../core/api");
+		const ackReply = replyMail(root, { sid: me }, { id: original.id, body: "ok", ack: true });
+		expect(ackReply.text).toContain("replied to");
+		// The ack was delivered to the ORIGINAL SENDER's mailbox (peer's) —
+		// from there it is an incoming ack that must refuse all replies.
+		const ackFrame = readMailbox(root, peer).frames.find(f => f.ack)!;
+		expect(ackFrame.from).toBe(me);
+
+		expect(() => replyMail(root, { sid: peer }, { id: ackFrame.id, body: "thanks" })).toThrow(/bare ack/);
+		// Same guard on fresh sends threading off an ack.
+		expect(() => sendMail(root, { sid: peer }, { to: me, body: "follow-up", inReplyTo: ackFrame.id })).toThrow(/bare ack/);
+		// And even an ack-to-ack is refused — threads close, full stop.
+		expect(() => replyMail(root, { sid: peer }, { id: ackFrame.id, body: "ok", ack: true })).toThrow(/bare ack/);
+	});
+
+	it("a bare ack bypasses the hop cap — thread closure is always reachable", () => {
+		const me = "0197aaaaaaaa7ff3c00000000003";
+		const peer = "0197aaaaaaaa7ff4c00000000004";
+		const { replyMail } = require("../core/api") as typeof import("../core/api");
+		// A deep-thread frame lands in my mailbox (hops already at the cap).
+		const deep = frame(peer, [me], "six hops deep");
+		deep.hops = 6;
+		deliverMail(root, me, deep);
+
+		// Substantive reply: refused at the cap.
+		expect(() => replyMail(root, { sid: me }, { id: deep.id, body: "still working" })).toThrow(/reply cap/);
+		// Bare ack: allowed at ANY depth — it closes the thread.
+		const closing = replyMail(root, { sid: me }, { id: deep.id, body: "ack", ack: true });
+		expect(closing.text).toContain("replied to");
+		// And the ack it produced can never be answered (refusal is checked first).
+		const ackFrame = readMailbox(root, peer).frames.find(f => f.ack)!;
+		expect(() => replyMail(root, { sid: peer }, { id: ackFrame.id, body: "ok", ack: true })).toThrow(/bare ack/);
+	});
 });
 
 describe("body spooling", () => {
@@ -263,5 +309,67 @@ describe("bodyFile validation", () => {
 	it("accepts generated spool names", () => {
 		const spooled = spoolBody(root, "0123abcdef456789", "y".repeat(400));
 		expect(resolveBody(root, { ...frame("p", ["me"], ""), ...spooled })).toBe("y".repeat(400));
+	});
+});
+
+describe("FYI reminder exemption", () => {
+	it("pendingFor skips FYI-subjected frames; subject match is case-insensitive", () => {
+		const answered = frame("b", ["a"], "fyi body", { subject: "FYI: for your information" });
+		deliverMail(root, "a", answered);
+		markDelivered(root, "a", [answered.id]);
+		expect(isFyi(answered)).toBe(true);
+		expect(pendingFor(root, "a", "a")).toHaveLength(0);
+
+		// normal subject still pending
+		const normal = frame("b", ["a"], "needs an answer", { subject: "question" });
+		deliverMail(root, "a", normal);
+		markDelivered(root, "a", [normal.id]);
+		expect(pendingFor(root, "a", "a").map(f => f.id)).toEqual([normal.id]);
+	});
+
+	it("fyi must be at the start of the subject; fyi inside the body does not count", () => {
+		expect(isFyi(frame("b", ["a"], "x", { subject: "fyi: lowercase" }))).toBe(true);
+		expect(isFyi(frame("b", ["a"], "x", { subject: "FYISH: not quite" }))).toBe(false);
+		expect(isFyi(frame("b", ["a"], "please fyi this", { subject: "real question" }))).toBe(false);
+	});
+});
+
+describe("duplicate-delivery detection", () => {
+	it("same sender/thread/subject/body under a fresh id matches within the window", () => {
+		const prior = frame("b", ["a"], "identical payload", { inReplyTo: "root-1", subject: "S" });
+		const dupe = frame("b", ["a"], "identical payload", { inReplyTo: "root-1", subject: "S" });
+		dupe.ts = new Date(Date.parse(prior.ts) + 5_000).toISOString(); // 5s later
+		deliverMail(root, "a", prior);
+		expect(duplicateOf(root, "a", dupe, 120_000)?.id).toBe(prior.id);
+	});
+
+	it("no match outside the window, for a different body, or from a different sender", () => {
+		const prior = frame("b", ["a"], "payload one");
+		deliverMail(root, "a", prior);
+
+		const late = frame("b", ["a"], "payload one");
+		late.ts = new Date(Date.parse(prior.ts) + 10 * 60_000).toISOString();
+		expect(duplicateOf(root, "a", late, 120_000)).toBeUndefined();
+
+		const other = frame("b", ["a"], "different body");
+		expect(duplicateOf(root, "a", other, 120_000)).toBeUndefined();
+
+		const otherFrom = frame("c", ["a"], "payload one");
+		expect(duplicateOf(root, "a", otherFrom, 120_000)).toBeUndefined();
+	});
+
+	it("suppressed duplicates are marked answered by the delivery layer, never pending", () => {
+		const prior = frame("b", ["a"], "please answer");
+		deliverMail(root, "a", prior);
+		markDelivered(root, "a", [prior.id]);
+		const dupe = frame("b", ["a"], "please answer");
+		dupe.ts = new Date(Date.parse(prior.ts) + 3_000).toISOString();
+		deliverMail(root, "a", dupe);
+		markDelivered(root, "a", [dupe.id]);
+		// Session-layer dedupe: the dupe never reaches the agent, so the delivery
+		// layer marks it answered (see deliverPending) — otherwise a suppressed
+		// retry would resurface as a pending reminder for unseen mail.
+		markAnswered(root, "a", [prior.id, dupe.id]);
+		expect(pendingFor(root, "a", "a")).toHaveLength(0);
 	});
 });

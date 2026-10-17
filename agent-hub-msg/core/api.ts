@@ -81,8 +81,17 @@ function buildFrame(
 ): MailFrame {
 	const parent = inReplyTo ? findFrame(root, me.sid, inReplyTo) : undefined;
 	if (inReplyTo && !parent) throw new Error(`message ${inReplyTo} not in this mailbox — reply only to mail you received`);
+	if (parent?.ack) {
+		throw new Error(
+			`message ${inReplyTo} is a bare ack — acks close the thread on both sides; never reply to an ack`,
+		);
+	}
 	const hops = nextHops(parent);
-	if (hops > MAX_HOPS) throw new Error(`thread depth ${hops} exceeds the ${MAX_HOPS}-hop reply cap`);
+	// Acks bypass the cap: terminal BY CONSTRUCTION (the ack-of-ack refusal
+	// above is checked FIRST, so an ack can never extend a chain at any depth),
+	// but thread closure must always be reachable. MAX_HOPS bounds conversation
+	// depth, not closing signals.
+	if (!ack && hops > MAX_HOPS) throw new Error(`thread depth ${hops} exceeds the ${MAX_HOPS}-hop reply cap`);
 	const id = Snowflake.next();
 	const spooled = spoolBody(root, id, body);
 	return {

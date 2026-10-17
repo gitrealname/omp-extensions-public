@@ -66,12 +66,26 @@ describe("formatBundle", () => {
 		expect(text).toContain(`id: ${f1.id}`);
 		expect(text).toContain("(re:");
 		expect(text).toContain("reply with msg_reply using the id");
+		expect(text).toMatch(/\[etiquette v\d+\]/); // envelope stamps the etiquette version
 	});
 
-	it("flags deep threads", () => {
+	it("reply: field — ack and FYI flag none, deep threads flag user-only, plain mail omits it", () => {
+		const ack = frame("a", ["me"], "ack", { ack: true });
+		const ackText = formatBundle({ from: "a", frames: [ack] }, f => f.body, s => s);
+		expect(ackText).toContain("reply: none — ack closes the thread");
+
+		const fyi = frame("a", ["me"], "the numbers", { subject: "FYI: census" });
+		const fyiText = formatBundle({ from: "a", frames: [fyi] }, f => f.body, s => s);
+		expect(fyiText).toContain("reply: none — FYI");
+
 		const deep = frame("a", ["me"], "hi", { hops: 6 });
-		const text = formatBundle({ from: "a", frames: [deep] }, f => f.body, s => s);
-		expect(text).toContain("deep thread");
+		const deepText = formatBundle({ from: "a", frames: [deep] }, f => f.body, s => s);
+		expect(deepText).toContain("reply: user-only — deep thread");
+
+		const plain = frame("a", ["me"], "a question");
+		const plainText = formatBundle({ from: "a", frames: [plain] }, f => f.body, s => s);
+		expect(plainText).not.toContain("reply:");
+		expect(plainText).toContain("reply with msg_reply"); // trailer still teaches the default
 	});
 
 	it("broadcast frames get a reply-to-sender-only suffix; direct frames do not advertise all=true", () => {

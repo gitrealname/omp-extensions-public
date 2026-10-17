@@ -166,8 +166,151 @@ describe("review hardening", () => {
 
 		const { setUserAlias } = await import("../core/api");
 		setUserAlias(root, SID, "helper");
-		session.maybeActivateByPhrase("mail helper ping them");
+		session.maybeActivateByPhrase("Mail helper ping them"); // capitalized — activation is case-insensitive
 		await new Promise(r => setTimeout(r, 20));
 		expect(injections.some(i => i.opts.customType === "agent-hub-msg-instructions")).toBe(true);
+	});
+});
+
+describe("duplicate-delivery guard", () => {
+	it("a retried send (same content, fresh id) is marked delivered silently, never injected", async () => {
+		const { session, injections } = makeSession();
+		const first = deliverToMe(PEER, "handoff payload");
+		await session.deliverPending(); // backlog path? no — first is already marked read; force unread
+		// deliverToMe marks read; simulate the retry arriving AFTER delivery.
+		const retry: MailFrame = {
+			id: `m${Math.random().toString(36).slice(2, 10)}`,
+			ts: new Date(Date.parse(first.ts) + 2_000).toISOString(),
+			from: PEER,
+			to: [SID],
+			body: "handoff payload",
+			subject: first.subject,
+			inReplyTo: first.inReplyTo,
+		};
+		deliverMail(root, SID, retry); // unread
+		const before = injections.filter(i => i.opts.customType === "agent-hub-msg").length;
+		await session.deliverPending();
+		const deliveries = injections.filter(i => i.opts.customType === "agent-hub-msg");
+		expect(deliveries.length).toBe(before);
+		expect(deliveries.some(d => d.content.includes("handoff payload") && d.content.includes(retry.id))).toBe(false);
+	});
+
+	it("a genuinely new message with the same subject still delivers", async () => {
+		const { session, injections } = makeSession();
+		deliverToMe(PEER, "first message");
+		const next: MailFrame = {
+			id: `m${Math.random().toString(36).slice(2, 10)}`,
+			ts: new Date().toISOString(),
+			from: PEER,
+			to: [SID],
+			body: "a completely different question",
+		};
+		deliverMail(root, SID, next);
+		await session.deliverPending();
+		expect(injections.filter(i => i.opts.customType === "agent-hub-msg")).toHaveLength(1);
+	});
+});
+
+describe("instruction drift refresh", () => {
+	it("poll tick re-injects when the instructions file changes", async () => {
+		const { session, injections } = makeSession();
+		await session.activate(false);
+		expect(injections.filter(i => i.opts.customType === "agent-hub-msg-instructions")).toHaveLength(1);
+
+		// Edit the file the way a user would; private API, same as a poll tick.
+		const { instructionsPath } = await import("../core/instructions");
+		const file = instructionsPath(EXT_DIR);
+		const original = fs.readFileSync(file, "utf-8");
+		try {
+			fs.writeFileSync(file, `${original}\n<!-- drift marker -->\n`, "utf-8");
+			await (session as unknown as { refreshInstructionsIfChanged(): Promise<void> }).refreshInstructionsIfChanged();
+			const counts = injections.filter(i => i.opts.customType === "agent-hub-msg-instructions");
+			expect(counts.length).toBe(2);
+			expect(counts[1].content).toContain("drift marker");
+		} finally {
+			fs.writeFileSync(file, original, "utf-8");
+		}
+	});
+});
+
+describe("roster dedupe", () => {
+	it("unchanged roster text is not re-injected; change re-injects", () => {
+		const { session } = makeSession();
+		session.register();
+		const first = session.listText();
+		expect(first.changed).toBe(true);
+		const second = session.listText();
+		expect(second.changed).toBe(false);
+		expect(second.text).toBe(first.text);
+
+		// A new registration changes the roster → injected again.
+		const { registerSession } = require("../core/registry") as typeof import("../core/registry");
+		registerSession(root, "0197aaaaaaaa7ff9c00000000009", { pid: 1, cwd: "C:/w/b", machine: "m" });
+		const third = session.listText();
+		expect(third.changed).toBe(true);
+	});
+});
+
+describe("stale-thread split", () => {
+	const deliverOnly = (body: string, extra: Partial<MailFrame> = {}): MailFrame => {
+		const f: MailFrame = { id: `m${Math.random().toString(36).slice(2, 10)}`, ts: new Date().toISOString(), from: PEER, to: [SID], body, ...extra };
+		deliverMail(root, SID, f);
+		return f;
+	};
+	const answeredIds = (): Set<string> => {
+		const state = JSON.parse(fs.readFileSync(path.join(root, "inboxes", SID, "state.json"), "utf-8")) as { answeredIds: string[] };
+		return new Set(state.answeredIds);
+	};
+
+	it("a thread with no activity in the window is delivered inert: shown, never woken, answered", async () => {
+		const { session, injections } = makeSession();
+		const old = deliverOnly("stale work request", { ts: new Date(Date.now() - 4 * 60 * 60_000).toISOString() });
+		await session.deliverPending();
+		const hot = injections.filter(i => i.opts.customType === "agent-hub-msg");
+		expect(hot).toHaveLength(0); // no wake, no work
+		const inert = injections.filter(i => i.opts.customType === "agent-hub-msg-stale");
+		expect(inert).toHaveLength(1);
+		expect(inert[0].opts.triggerTurn).toBe(false);
+		expect(inert[0].content).toContain(old.id);
+		expect(inert[0].content).toContain("STALE");
+		expect(answeredIds()).toContain(old.id); // never resurfaces as a reminder
+	});
+
+	it("a fresh reply keeps the whole thread hot — old frame in it delivers normally", async () => {
+		const { session, injections } = makeSession();
+		const old = deliverOnly("old question", { ts: new Date(Date.now() - 5 * 60 * 60_000).toISOString() });
+		const fresh = deliverOnly("and my follow-up", { inReplyTo: old.id }); // thread active now
+		await session.deliverPending();
+		const hot = injections.filter(i => i.opts.customType === "agent-hub-msg");
+		expect(hot).toHaveLength(1);
+		expect(hot[0].opts.triggerTurn).toBe(true);
+		expect(hot[0].content).toContain(old.id);
+		expect(hot[0].content).toContain(fresh.id);
+		expect(injections.some(i => i.opts.customType === "agent-hub-msg-stale")).toBe(false);
+	});
+
+	it("more than 10 stale frames: newest 10 shown inert, rest collapse into a digest line", async () => {
+		const { session, injections } = makeSession();
+		const frames = Array.from({ length: 12 }, (_, i) =>
+			deliverOnly(`stale item ${i}`, { ts: new Date(Date.now() - (5 + i) * 60 * 60_000).toISOString() }),
+		);
+		await session.deliverPending();
+		const inert = injections.filter(i => i.opts.customType === "agent-hub-msg-stale");
+		expect(inert).toHaveLength(1);
+		const shown = frames.slice(0, 10); // newest first
+		const hidden = frames.slice(10);
+		for (const f of shown) expect(inert[0].content).toContain(f.id);
+		for (const f of hidden) expect(inert[0].content).not.toContain(f.id);
+		expect(inert[0].content).toContain("2 older stale messages suppressed");
+		const answered = answeredIds();
+		for (const f of frames) expect(answered).toContain(f.id); // suppressed too — never nag
+	});
+
+	it("MSG_STALE_ACT_MS=0 disables the split — everything delivers hot", async () => {
+		const { session, injections } = makeSession({ env: { MSG_STALE_ACT_MS: "0" } });
+		deliverOnly("ancient request", { ts: new Date(Date.now() - 7 * 24 * 60 * 60_000).toISOString() });
+		await session.deliverPending();
+		expect(injections.filter(i => i.opts.customType === "agent-hub-msg")).toHaveLength(1);
+		expect(injections.some(i => i.opts.customType === "agent-hub-msg-stale")).toBe(false);
 	});
 });

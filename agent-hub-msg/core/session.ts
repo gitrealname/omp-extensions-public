@@ -13,14 +13,17 @@ import * as path from "node:path";
 import { batchBySender, formatBundle, type Bundle } from "./deliver";
 import { instructionsText, markInstructed, myself, pendingReminder, relativeAge, setUserAlias } from "./api";
 import { listSessions, registerSession, resolveAddress, setInstructed, heartbeat as registryHeartbeat } from "./registry";
-import { markDelivered, resolveBody, setInlineMax, unreadFor } from "./mailbox";
+import { duplicateOf, markAnswered, markDelivered, readMailbox, resolveBody, setInlineMax, threadActivity, unreadFor } from "./mailbox";
 
 /** Phrases in user input that activate the mail tools ("email" does not match).
  *  The keyword alone is not enough — the following token must RESOLVE to a
  *  registered session (alias or ≥4-char sid prefix) at activation time, so
  *  "check the mail server logs" never injects mail instructions, while
  *  "mail researcher ping them" does. */
-export const ACTIVATE_RE = /\b(?:mail|msg)\b[,: ]+([A-Za-z0-9_.-]+)/;
+export const ACTIVATE_RE = /\b(?:mail|msg)\b[,: ]+([A-Za-z0-9_.-]+)/i;
+
+/** Max stale frames shown inert per delivery tick; older ones collapse into a digest line. */
+export const MSG_STALE_SHOW = 10;
 
 export interface InjectOptions {
 	customType: string;
@@ -61,6 +64,11 @@ export class HubSession {
 	private watchDebounce: ReturnType<typeof setTimeout> | undefined;
 	private readonly fastFollowTimers: ReturnType<typeof setTimeout>[] = [];
 	private tickCount = 0;
+	/** Hash of the instructions text at last injection — a changed file (user edit,
+	 *  etiquette amendment) re-injects without waiting for compaction. */
+	private lastInstructionsHash: string | undefined;
+	/** Hash of the last injected roster — identical /msg list output is not re-injected. */
+	private lastRosterHash: string | undefined;
 
 	constructor(config: HubSessionConfig) {
 		this.config = config;
@@ -133,12 +141,33 @@ export class HubSession {
 	async injectInstructions(force = false): Promise<void> {
 		const { sid } = this.me;
 		if (myself(this.config.root, sid).instructed && !force) return;
-		this.config.inject(instructionsText(this.config.instructionsDir), {
+		const text = instructionsText(this.config.instructionsDir);
+		this.lastInstructionsHash = hashOf(text);
+		this.config.inject(text, {
 			customType: "agent-hub-msg-instructions",
 			display: false,
 		});
 		markInstructed(this.config.root, sid);
 		this.config.log?.("instructions injected");
+	}
+
+	/**
+	 * Re-inject when the instructions file changed since the last injection —
+	 * amendments reach long-lived sessions without waiting for compaction.
+	 * Amnesia cases (instructed=true but context lost the block) are covered by
+	 * reinjectAfterCompact; this covers EDIT drift, the complement.
+	 */
+	private async refreshInstructionsIfChanged(): Promise<void> {
+		if (!this.activated || !this.sid) return;
+		try {
+			const text = instructionsText(this.config.instructionsDir);
+			const hash = hashOf(text);
+			if (hash === this.lastInstructionsHash) return;
+			await this.injectInstructions(true);
+			this.config.log?.("instructions re-injected (file changed)");
+		} catch (err) {
+			this.config.log?.(`instruction refresh failed: ${err instanceof Error ? err.message : String(err)}`);
+		}
 	}
 
 	/** User-input hook: activate on phrases ("mail <target> …"); failure is silent. */
@@ -194,23 +223,82 @@ export class HubSession {
 	async deliverPending(): Promise<void> {
 		if (this.delivering || this.stopped) return;
 		const { sid } = this.me;
-		const pending = unreadFor(this.config.root, sid, sid);
+		const fresh = unreadFor(this.config.root, sid, sid);
+		if (fresh.length === 0) return;
+		// Duplicate-send guard: harness-level tool retries re-execute sends with a
+		// fresh id — identical content must not re-anchor a turn or re-open a
+		// thread an ack already closed. Marked delivered silently.
+		const windowMs = Math.max(0, Number(this.config.env("MSG_DEDUPE_MS") ?? 120_000) || 0);
+		const pending: typeof fresh = [];
+		for (const frame of fresh) {
+			if (windowMs > 0 && duplicateOf(this.config.root, sid, frame, windowMs)) {
+				// Answered, not just delivered — a suppressed duplicate must never
+				// resurface as a pending reminder for mail the agent never saw.
+				markDelivered(this.config.root, sid, [frame.id]);
+				markAnswered(this.config.root, sid, [frame.id]);
+				this.config.log?.(`duplicate delivery skipped (${frame.id})`);
+				continue;
+			}
+			pending.push(frame);
+		}
 		if (pending.length === 0) return;
-		const bundles = batchBySender(pending);
-		const bundle: Bundle = bundles[0];
+		// Stale-thread split: mail in a thread whose LATEST activity (including
+		// frames already delivered) is older than MSG_STALE_ACT_MS is reference
+		// material — delivered without waking the agent and marked answered, so
+		// old work never auto-starts but stays readable. Hot threads deliver
+		// and wake as usual. 0 disables.
+		const staleMs = Math.max(0, Number(this.config.env("MSG_STALE_ACT_MS") ?? 3 * 60 * 60_000) || 0);
+		let hot = pending;
+		let stale: typeof pending = [];
+		if (staleMs > 0) {
+			const activity = threadActivity(readMailbox(this.config.root, sid).frames);
+			const now = Date.now();
+			hot = [];
+			stale = [];
+			for (const f of pending) {
+				(now - (activity.get(f.id) ?? Date.parse(f.ts)) > staleMs ? stale : hot).push(f);
+			}
+		}
+		if (hot.length === 0 && stale.length === 0) return;
 		// Guard BEFORE activation: activate awaits a real harness round-trip,
 		// during which watch/poll/fast-follow ticks could otherwise each enter
 		// and inject the same bundle multiple times.
 		this.delivering = true;
 		// The agent needs the tools + instructions to reply — activate silently.
-		if (!this.activated) await this.activate(false).catch(() => {});
+		// Stale-only delivery never wakes anyone, so it must not force activation.
+		if (hot.length > 0 && !this.activated) await this.activate(false).catch(() => {});
 		try {
-			this.config.inject(
-				formatBundle(bundle, frame => resolveBody(this.config.root, frame), s => this.describe(s)),
-				{ customType: "agent-hub-msg", display: true, triggerTurn: true },
-			);
-			markDelivered(this.config.root, sid, bundle.frames.map(f => f.id));
-			this.config.log?.(`delivered bundle from ${bundle.from} (${bundle.frames.length})`);
+			if (hot.length > 0) {
+				const bundles = batchBySender(hot);
+				const bundle: Bundle = bundles[0];
+				this.config.inject(
+					formatBundle(bundle, frame => resolveBody(this.config.root, frame), s => this.describe(s)),
+					{ customType: "agent-hub-msg", display: true, triggerTurn: true },
+				);
+				markDelivered(this.config.root, sid, bundle.frames.map(f => f.id));
+				this.config.log?.(`delivered bundle from ${bundle.from} (${bundle.frames.length})`);
+			}
+			if (stale.length > 0) {
+				const ordered = [...stale].sort((a, b) => Date.parse(b.ts) - Date.parse(a.ts));
+				const shown = ordered.slice(0, MSG_STALE_SHOW);
+				const suppressed = ordered.slice(MSG_STALE_SHOW);
+				const blocks = batchBySender(shown).map(b =>
+					formatBundle(b, frame => resolveBody(this.config.root, frame), s => this.describe(s), { stale: true }),
+				);
+				if (suppressed.length > 0) {
+					blocks.push(`(${suppressed.length} older stale messages suppressed — msg_inbox({read:true}) to review.)`);
+				}
+				this.config.inject(blocks.join("\n\n"), {
+					customType: "agent-hub-msg-stale",
+					display: true,
+					triggerTurn: false,
+				});
+				// Read-and-don't-act: consumed AND answered — stale mail must never
+				// resurface as a pending reminder demanding work on an old thread.
+				markDelivered(this.config.root, sid, stale.map(f => f.id));
+				markAnswered(this.config.root, sid, stale.map(f => f.id));
+				this.config.log?.(`delivered ${shown.length} stale frames inert (${suppressed.length} suppressed)`);
+			}
 		} catch (err) {
 			this.config.log?.(`delivery failed: ${err instanceof Error ? err.message : String(err)}`);
 		} finally {
@@ -266,6 +354,7 @@ export class HubSession {
 			if (!this.sid) return; // wait for attach()
 			if (this.tickCount % this.keepaliveEvery === 0) registryHeartbeat(this.config.root, this.sid);
 			this.tickCount++;
+			await this.refreshInstructionsIfChanged();
 			await this.deliverPending();
 		} catch (err) {
 			this.config.log?.(`poll error: ${err instanceof Error ? err.message : String(err)}`);
@@ -302,8 +391,13 @@ export class HubSession {
 		return row && row.entry.aliases.length > 0 ? `${row.entry.aliases[0]} (${sid.slice(-6)})` : sid;
 	}
 
-	/** The /msg list: shown to the user and injected for the LLM. */
-	listText(): string {
+	/**
+	 * The /msg list: shown to the user and injected for the LLM. Roster noise
+	 * guard: unchanged output is reported but not re-injected — registration
+	 * churn mid-turn must not re-anchor the agent's attention. `changed` is
+	 * false when the identical text was injected since this boot.
+	 */
+	listText(): { text: string; changed: boolean } {
 		const now = Date.now();
 		const rows = listSessions(this.config.root, now).map(({ sid, entry, live }) => {
 			const status = live ? "" : " (offline)";
@@ -314,11 +408,25 @@ export class HubSession {
 			const pid = entry.pid !== undefined ? ` pid ${entry.pid}` : "";
 			return `${sid}${pid} ${relativeAge(entry.lastSeen, now)}${aliases} (${entry.cwd})${status}`;
 		});
-		return `registered agent sessions:\n${rows.join("\n") || "(none)"}`;
+		const text = `registered agent sessions:\n${rows.join("\n") || "(none)"}`;
+		const hash = hashOf(text);
+		const changed = hash !== this.lastRosterHash;
+		this.lastRosterHash = hash;
+		return { text, changed };
 	}
 
 	/** Force-set the instructed flag (adapter-driven flows). */
 	markInstructed(): void {
 		if (this.sid) setInstructed(this.config.root, this.sid, true);
 	}
+}
+
+/** Cheap content hash for drift detection (roster/instructions). Not crypto. */
+function hashOf(text: string): string {
+	let h = 2166136261;
+	for (let i = 0; i < text.length; i++) {
+		h ^= text.charCodeAt(i);
+		h = Math.imul(h, 16777619);
+	}
+	return (h >>> 0).toString(36);
 }

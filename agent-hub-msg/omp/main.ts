@@ -197,9 +197,11 @@ export default function agentHubMsgExtension(pi: ExtensionAPI): void {
 					break;
 				}
 				case "list": {
-					const text = session.listText();
-					ctx.ui.notify(text, "info");
-					pi.sendMessage({ customType: "agent-hub-msg-list", content: text, display: true, attribution: "user" });
+					const { text, changed } = session.listText();
+					ctx.ui.notify(changed ? text : `${text}\n(unchanged since last shown — not re-injected)`, "info");
+					if (changed) {
+						pi.sendMessage({ customType: "agent-hub-msg-list", content: text, display: true, attribution: "user" });
+					}
 					break;
 				}
 				case "alias": {
