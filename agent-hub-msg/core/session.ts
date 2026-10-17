@@ -140,14 +140,25 @@ export class HubSession {
 	/** Inject the instructions file unless already instructed (force overrides). */
 	async injectInstructions(force = false): Promise<void> {
 		const { sid } = this.me;
-		if (myself(this.config.root, sid).instructed && !force) return;
+		const me = myself(this.config.root, sid);
 		const text = instructionsText(this.config.instructionsDir);
-		this.lastInstructionsHash = hashOf(text);
+		const hash = hashOf(text);
+		if (me.instructed && !force) {
+			// Restored instructed session: its context already holds A rules
+			// version — drift is measured against what was INJECTED (the
+			// persisted hash), not against this boot's file. Restoring with an
+			// unchanged file injects nothing; a file edited while offline
+			// re-injects exactly once. Legacy entries without a persisted hash
+			// adopt the current file as baseline (no duplicate injection).
+			if (!this.lastInstructionsHash) this.lastInstructionsHash = me.instructionsHash ?? hash;
+			return;
+		}
+		this.lastInstructionsHash = hash;
 		this.config.inject(text, {
 			customType: "agent-hub-msg-instructions",
 			display: false,
 		});
-		markInstructed(this.config.root, sid);
+		markInstructed(this.config.root, sid, hash);
 		this.config.log?.("instructions injected");
 	}
 
@@ -225,10 +236,17 @@ export class HubSession {
 		const { sid } = this.me;
 		const fresh = unreadFor(this.config.root, sid, sid);
 		if (fresh.length === 0) return;
+		// Duration knobs: malformed values fall back to the DEFAULT (guard-on),
+		// matching the constructor's malformed-values philosophy. 0 disables.
+		const parseMs = (name: string, fallback: number): number => {
+			const raw = this.config.env(name);
+			const n = raw === undefined || raw.trim() === "" ? fallback : Number(raw);
+			return Number.isFinite(n) ? Math.max(0, n) : fallback;
+		};
 		// Duplicate-send guard: harness-level tool retries re-execute sends with a
 		// fresh id — identical content must not re-anchor a turn or re-open a
 		// thread an ack already closed. Marked delivered silently.
-		const windowMs = Math.max(0, Number(this.config.env("MSG_DEDUPE_MS") ?? 120_000) || 0);
+		const windowMs = parseMs("MSG_DEDUPE_MS", 120_000);
 		const pending: typeof fresh = [];
 		for (const frame of fresh) {
 			if (windowMs > 0 && duplicateOf(this.config.root, sid, frame, windowMs)) {
@@ -246,8 +264,8 @@ export class HubSession {
 		// frames already delivered) is older than MSG_STALE_ACT_MS is reference
 		// material — delivered without waking the agent and marked answered, so
 		// old work never auto-starts but stays readable. Hot threads deliver
-		// and wake as usual. 0 disables.
-		const staleMs = Math.max(0, Number(this.config.env("MSG_STALE_ACT_MS") ?? 3 * 60 * 60_000) || 0);
+		// and wake as usual.
+		const staleMs = parseMs("MSG_STALE_ACT_MS", 3 * 60 * 60_000);
 		let hot = pending;
 		let stale: typeof pending = [];
 		if (staleMs > 0) {

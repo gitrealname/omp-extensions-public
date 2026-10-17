@@ -335,17 +335,19 @@ describe("FYI reminder exemption", () => {
 });
 
 describe("duplicate-delivery detection", () => {
-	it("same sender/thread/subject/body under a fresh id matches within the window", () => {
+	it("same sender/thread/subject/body under a fresh id matches within the window (original delivered)", () => {
 		const prior = frame("b", ["a"], "identical payload", { inReplyTo: "root-1", subject: "S" });
 		const dupe = frame("b", ["a"], "identical payload", { inReplyTo: "root-1", subject: "S" });
 		dupe.ts = new Date(Date.parse(prior.ts) + 5_000).toISOString(); // 5s later
 		deliverMail(root, "a", prior);
+		markDelivered(root, "a", [prior.id]); // the original must be RECEIVED to anchor dedupe
 		expect(duplicateOf(root, "a", dupe, 120_000)?.id).toBe(prior.id);
 	});
 
 	it("no match outside the window, for a different body, or from a different sender", () => {
 		const prior = frame("b", ["a"], "payload one");
 		deliverMail(root, "a", prior);
+		markDelivered(root, "a", [prior.id]);
 
 		const late = frame("b", ["a"], "payload one");
 		late.ts = new Date(Date.parse(prior.ts) + 10 * 60_000).toISOString();
@@ -356,6 +358,14 @@ describe("duplicate-delivery detection", () => {
 
 		const otherFrom = frame("c", ["a"], "payload one");
 		expect(duplicateOf(root, "a", otherFrom, 120_000)).toBeUndefined();
+	});
+
+	it("a retry whose original was never delivered is NOT a duplicate — both copies deliver", () => {
+		const prior = frame("b", ["a"], "offline retry payload");
+		deliverMail(root, "a", prior); // unread — recipient offline, both copies land in one tick
+		const retry = frame("b", ["a"], "offline retry payload");
+		retry.ts = new Date(Date.parse(prior.ts) + 5_000).toISOString();
+		expect(duplicateOf(root, "a", retry, 120_000)).toBeUndefined();
 	});
 
 	it("suppressed duplicates are marked answered by the delivery layer, never pending", () => {

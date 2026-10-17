@@ -337,9 +337,24 @@ export function isFyi(frame: MailFrame): boolean {
 export function duplicateOf(root: string, sid: string, frame: MailFrame, windowMs: number): MailFrame | undefined {
 	const key = dupKey(frame);
 	const ts = Date.parse(frame.ts);
+	const readIds = new Set(readState(root, sid).readIds);
 	for (const prior of readMailbox(root, sid).frames) {
 		if (prior.id === frame.id || prior.from !== frame.from) continue;
+		// The original must be one the recipient actually RECEIVED (delivered):
+		// when the harness retries while the recipient is offline, both copies
+		// land unread in the same delivery tick — treating either as the
+		// original would swallow both. Both-unread delivers both (rule 5
+		// covers answering once); retry-after-delivery still suppresses.
+		if (!readIds.has(prior.id)) continue;
 		if (dupKey(prior) !== key) continue;
+		// Prefix equality is only a cheap pre-filter — confirm full-body
+		// equality so distinct spooled messages sharing a header/template
+		// prefix are never suppressed as duplicates.
+		try {
+			if (resolveBody(root, prior) !== resolveBody(root, frame)) continue;
+		} catch {
+			continue;
+		}
 		const priorTs = Date.parse(prior.ts);
 		if (!Number.isFinite(ts) || !Number.isFinite(priorTs)) continue;
 		if (Math.abs(ts - priorTs) <= windowMs) return prior;

@@ -61,9 +61,13 @@ function describeList(root: string, sids: string[], me: string): string {
 }
 
 /** Registry view of a session's aliases + instructed flag. */
-export function myself(root: string, sid: string): { aliases: string[]; instructed: boolean } {
+export function myself(root: string, sid: string): { aliases: string[]; instructed: boolean; instructionsHash?: string } {
 	const row = listSessions(root).find(r => r.sid === sid);
-	return { aliases: row?.entry.aliases ?? [], instructed: row?.entry.instructed ?? false };
+	return {
+		aliases: row?.entry.aliases ?? [],
+		instructed: row?.entry.instructed ?? false,
+		instructionsHash: row?.entry.instructionsHash,
+	};
 }
 
 function findFrame(root: string, sid: string, id: string): MailFrame | undefined {
@@ -230,8 +234,8 @@ export function instructionsText(extensionDir: string): string {
 }
 
 /** Record that instructions were injected into this session's context. */
-export function markInstructed(root: string, sid: string): void {
-	setInstructed(root, sid, true);
+export function markInstructed(root: string, sid: string, instructionsHash?: string): void {
+	setInstructed(root, sid, true, Date.now(), instructionsHash);
 }
 
 /**

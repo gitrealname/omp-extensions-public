@@ -31,6 +31,10 @@ export interface RegistryEntry {
 	aliases: string[];
 	/** The LLM of this session has been given the messaging instructions. */
 	instructed: boolean;
+	/** Hash of the instructions text actually injected — drift baseline that
+	 *  survives restarts (a restored instructed session compares against THIS,
+	 *  not against the current file, so offline edits still re-inject once). */
+	instructionsHash?: string;
 }
 
 export interface RegistryData {
@@ -191,6 +195,7 @@ export function registerSession(root: string, sid: string, meta: SessionMeta, no
 			lastSeen: now,
 			aliases: prev?.aliases ?? [],
 			instructed: prev?.instructed ?? false,
+			instructionsHash: prev?.instructionsHash,
 		};
 		data[sid] = entry;
 		writeRegistry(root, data);
@@ -232,12 +237,13 @@ export function addAlias(root: string, sid: string, alias: string, now = Date.no
 }
 
 /** Set/unset the instructed flag (instructions injected into the LLM context). */
-export function setInstructed(root: string, sid: string, value: boolean, now = Date.now()): void {
+export function setInstructed(root: string, sid: string, value: boolean, now = Date.now(), instructionsHash?: string): void {
 	withRegistryLock(root, () => {
 		const data = readRegistry(root);
 		const entry = data[sid];
 		if (!entry) return;
 		entry.instructed = value;
+		if (instructionsHash !== undefined) entry.instructionsHash = instructionsHash;
 		entry.lastSeen = now;
 		writeRegistry(root, data);
 	});

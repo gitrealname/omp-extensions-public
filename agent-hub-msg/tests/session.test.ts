@@ -209,6 +209,53 @@ describe("duplicate-delivery guard", () => {
 		await session.deliverPending();
 		expect(injections.filter(i => i.opts.customType === "agent-hub-msg")).toHaveLength(1);
 	});
+
+	it("both copies unread (offline retry) deliver BOTH — the guard never swallows undelivered originals", async () => {
+		const { session, injections } = makeSession();
+		const original: MailFrame = { id: "mOrig1", ts: new Date().toISOString(), from: PEER, to: [SID], body: "handoff payload" };
+		const retry: MailFrame = { ...original, id: "mRetry1", ts: new Date(Date.parse(original.ts) + 2_000).toISOString() };
+		deliverMail(root, SID, original); // NOT marked read — recipient was offline
+		deliverMail(root, SID, retry);
+		await session.deliverPending();
+		const deliveries = injections.filter(i => i.opts.customType === "agent-hub-msg");
+		expect(deliveries).toHaveLength(1); // one bundle, same sender
+		expect(deliveries[0].content).toContain("mOrig1");
+		expect(deliveries[0].content).toContain("mRetry1");
+		const answered = JSON.parse(fs.readFileSync(path.join(root, "inboxes", SID, "state.json"), "utf-8")).answeredIds as string[];
+		expect(answered).not.toContain("mOrig1"); // real mail stays pending, never swallowed
+	});
+
+	it("prefix match is a pre-filter only — distinct full bodies with a shared 200-char header deliver", async () => {
+		const { session, injections } = makeSession();
+		const first = deliverToMe(PEER, `${"x".repeat(200)}-report-A-tail`); // delivered + read
+		const second: MailFrame = {
+			id: "mPref2",
+			ts: new Date(Date.parse(first.ts) + 1_000).toISOString(),
+			from: PEER,
+			to: [SID],
+			body: `${"x".repeat(200)}-report-B-tail`,
+		};
+		deliverMail(root, SID, second);
+		await session.deliverPending();
+		const deliveries = injections.filter(i => i.opts.customType === "agent-hub-msg");
+		expect(deliveries).toHaveLength(1);
+		expect(deliveries[0].content).toContain("-report-B-tail");
+	});
+
+	it("malformed MSG_DEDUPE_MS falls back to the default window (retry still suppressed)", async () => {
+		const { session, injections } = makeSession({ env: { MSG_DEDUPE_MS: "abc" } });
+		const first = deliverToMe(PEER, "handoff payload");
+		const retry: MailFrame = {
+			id: `m${Math.random().toString(36).slice(2, 10)}`,
+			ts: new Date(Date.parse(first.ts) + 2_000).toISOString(),
+			from: PEER,
+			to: [SID],
+			body: "handoff payload",
+		};
+		deliverMail(root, SID, retry);
+		await session.deliverPending();
+		expect(injections.filter(i => i.opts.customType === "agent-hub-msg")).toHaveLength(0);
+	});
 });
 
 describe("instruction drift refresh", () => {
@@ -227,6 +274,38 @@ describe("instruction drift refresh", () => {
 			const counts = injections.filter(i => i.opts.customType === "agent-hub-msg-instructions");
 			expect(counts.length).toBe(2);
 			expect(counts[1].content).toContain("drift marker");
+		} finally {
+			fs.writeFileSync(file, original, "utf-8");
+		}
+	});
+
+	it("restored instructed session does not duplicate-inject unchanged instructions", async () => {
+		const first = makeSession();
+		await first.session.activate(false); // injects + persists the injected hash
+		expect(first.injections.filter(i => i.opts.customType === "agent-hub-msg-instructions")).toHaveLength(1);
+
+		// Fresh HubSession, same registry: instructed=true + persisted hash.
+		const restored = makeSession();
+		await restored.session.activate(false); // early-return path sets the baseline
+		await (restored.session as unknown as { refreshInstructionsIfChanged(): Promise<void> }).refreshInstructionsIfChanged();
+		expect(restored.injections.filter(i => i.opts.customType === "agent-hub-msg-instructions")).toHaveLength(0);
+	});
+
+	it("restored instructed session re-injects exactly once when the file drifted while offline", async () => {
+		const first = makeSession();
+		await first.session.activate(false);
+
+		const { instructionsPath } = await import("../core/instructions");
+		const file = instructionsPath(EXT_DIR);
+		const original = fs.readFileSync(file, "utf-8");
+		try {
+			fs.writeFileSync(file, `${original}\n<!-- offline drift marker -->\n`, "utf-8");
+			const restored = makeSession();
+			await restored.session.activate(false); // baseline = persisted (pre-edit) hash
+			await (restored.session as unknown as { refreshInstructionsIfChanged(): Promise<void> }).refreshInstructionsIfChanged();
+			const injected = restored.injections.filter(i => i.opts.customType === "agent-hub-msg-instructions");
+			expect(injected).toHaveLength(1);
+			expect(injected[0].content).toContain("offline drift marker");
 		} finally {
 			fs.writeFileSync(file, original, "utf-8");
 		}
@@ -312,5 +391,12 @@ describe("stale-thread split", () => {
 		await session.deliverPending();
 		expect(injections.filter(i => i.opts.customType === "agent-hub-msg")).toHaveLength(1);
 		expect(injections.some(i => i.opts.customType === "agent-hub-msg-stale")).toBe(false);
+	});
+
+	it("malformed MSG_STALE_ACT_MS falls back to the default (stale split stays active)", async () => {
+		const { session, injections } = makeSession({ env: { MSG_STALE_ACT_MS: "abc" } });
+		deliverOnly("ancient request", { ts: new Date(Date.now() - 4 * 60 * 60_000).toISOString() });
+		await session.deliverPending();
+		expect(injections.some(i => i.opts.customType === "agent-hub-msg-stale")).toBe(true);
 	});
 });
