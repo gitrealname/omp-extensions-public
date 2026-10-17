@@ -195,6 +195,10 @@ bun run cli/msg.ts pending <sid|alias>    # the reminder queue for that session
   mail to it goes nowhere until the conflict is removed. There is deliberately no
   steal/`--force`: reassignment means remove the alias from the old session and re-add
   it on the new one (explicit act, inspectable in the registry).
-- **Backlog drain**: an offline backlog is delivered oldest-first, one sender-bundle
-  per turn. Weeks of mail would flood context (compaction → reminder churn) — no
-  windowing yet, deferred until a real backlog exists.
+- **Backlog drain**: cold threads (no activity past `MSG_STALE_ACT_MS`, default 3 h)
+  deliver inert without waking the agent; >10 stale frames per tick collapse into one
+  digest line. A weeks-old backlog costs one silent block, not a flood.
+- **Sender identity is provenance, not authorship**: a frame's `from` field is
+  unverified — a phantom frame once pre-empted a review gate here (an ack nobody
+  intended closed the thread mid-review). Gates read the verdict message, never a
+  receipt; treat content on merit regardless of provenance.
