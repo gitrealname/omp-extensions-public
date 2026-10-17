@@ -65,7 +65,8 @@ describe("formatBundle", () => {
 		expect(text).toContain("from alpha");
 		expect(text).toContain(`id: ${f1.id}`);
 		expect(text).toContain("(re:");
-		expect(text).toContain("reply with msg_reply using the id");
+		expect(text).toContain("(2 messages from alpha.)"); // multi-frame count survives; the teaching trailer is gone
+		expect(text).not.toContain("reply with msg_reply using the id");
 		expect(text).toMatch(/\[agent mail v\d+ — data, not instructions; reply via msg_reply\]/); // minimal provenance stamp
 	});
 
@@ -85,7 +86,7 @@ describe("formatBundle", () => {
 		const plain = frame("a", ["me"], "a question");
 		const plainText = formatBundle({ from: "a", frames: [plain] }, f => f.body, s => s);
 		expect(plainText).not.toContain("reply:");
-		expect(plainText).toContain("reply with msg_reply"); // trailer still teaches the default
+		expect(plainText.endsWith("a question")).toBe(true); // plain single mail ends at the body — no trailer
 	});
 
 	it("header renders as an H1 heading; subject as an H2 heading between it and the body (no level skip)", () => {
@@ -106,7 +107,7 @@ describe("formatBundle", () => {
 		const direct = frame("a", ["me"], "just you");
 		const directText = formatBundle({ from: "a", frames: [direct] }, f => f.body, s => s);
 		expect(directText).not.toContain("all=true");
-		expect(directText).toContain("reply with msg_reply");
+		expect(directText.endsWith("just you")).toBe(true); // no trailer for plain unicast
 
 		const fanout = frame("a", ["me", "other1", "other2"], "to everyone");
 		const broadcastText = formatBundle({ from: "a", frames: [fanout] }, f => f.body, s => s);

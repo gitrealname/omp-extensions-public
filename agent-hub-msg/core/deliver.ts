@@ -90,18 +90,19 @@ export function formatBundle(
 		lines.push(resolve(frame).trimEnd());
 		lines.push("");
 	}
+	// Optional trailer — only when the bundle carries a fact the per-frame
+	// headers don't already state (stale handling, fan-out, or a count for
+	// multi-frame bundles). A plain single hot unicast ends at the body.
 	const recipients = bundle.frames[0]?.to.filter(t => t !== "all") ?? [];
 	const broadcast = recipients.length > 1 || (bundle.frames[0]?.to.includes("all") ?? false);
 	const n = bundle.frames.length;
 	const count = n === 1 ? "1 message" : `${n} messages`;
 	if (opts.stale) {
 		lines.push(`(${count} from ${describe(bundle.from)} — stale backlog, delivered without waking the agent; do not act unless the user asks.)`);
-	} else {
-		lines.push(
-			broadcast
-				? `(${count} from ${describe(bundle.from)} — broadcast to ${recipients.length || "several"} agents: reply to the sender only, never all=true.)`
-				: `(${count} from ${describe(bundle.from)} — reply with msg_reply using the id shown above.)`,
-		);
+	} else if (broadcast) {
+		lines.push(`(${count} from ${describe(bundle.from)} — broadcast to ${recipients.length || "several"} agents: reply to the sender only, never all=true.)`);
+	} else if (n > 1) {
+		lines.push(`(${count} from ${describe(bundle.from)}.)`);
 	}
 	return lines.join("\n").trim();
 }

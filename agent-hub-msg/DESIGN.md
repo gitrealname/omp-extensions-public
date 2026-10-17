@@ -32,7 +32,7 @@ A delivered bundle is one prompt block:
 # [mail from alice (sid) (re: abcdef12) | id: … | reply: none — ack closes the thread]          ← header (per frame; markdown H1; metadata incl. thread marker)
 ## subject                                                                                       ← subject heading (per frame; markdown H2 — levels must not skip; skipped when absent)
 <body — spliced in full; long bodies spooled but shown inline>                                   ← body
-(2 messages from alice — reply with msg_reply using the id shown above.)                         ← trailer (per bundle; broadcast note when fan-out)
+(2 messages from alice.)                                                                         ← trailer — OPTIONAL, only when it states something headers don't: stale backlog note, broadcast fan-out note, or a count for multi-frame bundles; a plain single hot unicast ends at the body
 ```
 
 ### The `reply:` header field
