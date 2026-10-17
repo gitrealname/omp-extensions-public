@@ -23,7 +23,7 @@ import {
 	windowFrames,
 	type MailFrame,
 } from "./mailbox";
-import { addAlias, expandTo, listSessions, setInstructed } from "./registry";
+import { addAlias, expandTo, listSessions, REGISTRY_STALE_AFTER_MS, setInstructed } from "./registry";
 import { Snowflake } from "./id";
 
 /** The calling session's identity. */
@@ -208,7 +208,13 @@ export function whoami(root: string, sid: string): ToolResult {
 	const rows = listSessions(root, now)
 		.filter(r => r.sid !== sid)
 		.map(({ sid: other, entry, live }) => {
-			const status = live ? "" : " (offline — mail will wait)";
+			// Display-only staleness — entries are never evicted, but a month-old
+			// offline entry is noise unless flagged as such.
+			const status = live
+				? ""
+				: now - entry.lastSeen > REGISTRY_STALE_AFTER_MS
+					? " (stale — offline 30d+)"
+					: " (offline — mail will wait)";
 			const aliases = entry.aliases.length > 0 ? ` [${entry.aliases.join(", ")}]` : "";
 			return `${other} ${relativeAge(entry.lastSeen, now)}${aliases} (${entry.cwd})${status}`;
 		});

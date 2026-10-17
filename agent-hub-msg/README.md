@@ -69,7 +69,7 @@ in `/msg list` between snapshots means two frontends share one session id
 
 ## Agent-side tools
 
-- `msg_who` — your address + every registered session (online/offline derived from last-seen; entries are never evicted)
+- `msg_who` — your address + every registered session (online/offline derived from last-seen; offline 30d+ shows `stale`; entries are never evicted)
 - `msg_send` — `to` (session id, unique prefix, alias, comma list, or `"all"`), `body`, optional `subject`, `inReplyTo`, `ack`
 - `msg_reply` — **by message id only**; recipients are derived from the thread (`all: true` = reply-all, ignored for acks)
 - `msg_inbox` — subjects + previews (never full bodies; `msg_read` pulls those); unread only by default, `{ read: true, since, limit }` for history

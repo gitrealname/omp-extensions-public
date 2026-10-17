@@ -8,6 +8,7 @@ import {
 	heartbeat,
 	isLive,
 	listSessions,
+	REGISTRY_STALE_AFTER_MS,
 	registerSession,
 	resolveAddress,
 	setInstructed,
@@ -53,6 +54,20 @@ describe("registerSession", () => {
 		expect(rows[0].live).toBe(false);
 		expect(isLive(stale.entry)).toBe(true); // fresh entry is live
 	});
+
+	it("msg_who marks entries offline 30d+ as stale (display only, never evicted)", () => {
+		const { whoami } = require("../core/api") as typeof import("../core/api");
+		registerSession(root, S(1), meta(100));
+		registerSession(root, S(2), meta(101));
+		const raw = JSON.parse(fs.readFileSync(path.join(root, "registry.json"), "utf-8"));
+		raw[S(1)].lastSeen = Date.now() - REGISTRY_STALE_AFTER_MS - 60_000; // 30d+ offline
+		fs.writeFileSync(path.join(root, "registry.json"), JSON.stringify(raw));
+		// Viewer is S(2): S(1) appears with the stale marker; a merely-offline
+		// recent entry would say "offline — mail will wait" instead.
+		const out = whoami(root, S(2)).text;
+		expect(out).toContain("stale — offline 30d+");
+		expect(out).not.toContain("offline — mail will wait");
+	});
 });
 
 describe("heartbeat", () => {
@@ -67,12 +82,12 @@ describe("heartbeat", () => {
 });
 
 describe("addAlias", () => {
-	it("adds multiple aliases, case-insensitive dedupe", () => {
+	it("keeps only the last alias set — a new alias replaces the previous", () => {
 		registerSession(root, S(1), meta(100));
 		addAlias(root, S(1), "reviewer");
-		const again = addAlias(root, S(1), "REVIEWER");
-		expect(again.aliases).toEqual(["reviewer"]);
-		expect(addAlias(root, S(1), "architect").aliases).toEqual(["reviewer", "architect"]);
+		expect(addAlias(root, S(1), "architect").aliases).toEqual(["architect"]);
+		// Re-setting the same alias is idempotent.
+		expect(addAlias(root, S(1), "architect").aliases).toEqual(["architect"]);
 	});
 
 	it("warns on a duplicate label owned by another session", () => {

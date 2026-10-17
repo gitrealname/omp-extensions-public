@@ -20,6 +20,9 @@ import { validSid } from "./mailbox";
 /** lastSeen older than this ⇒ shown offline (entry kept). */
 export const STALE_MS = 5 * 60 * 1000;
 
+/** Display-only marker threshold in msg_who (entries are never evicted). */
+export const REGISTRY_STALE_AFTER_MS = 30 * 24 * 60 * 60_000;
+
 export interface RegistryEntry {
 	sid: string;
 	pid: number;
@@ -27,7 +30,7 @@ export interface RegistryEntry {
 	machine: string;
 	registeredAt: string;
 	lastSeen: number;
-	/** User-set labels; multiple allowed. */
+	/** The session's user-set label — one per session, the last one set wins. */
 	aliases: string[];
 	/** The LLM of this session has been given the messaging instructions. */
 	instructed: boolean;
@@ -229,7 +232,8 @@ export function addAlias(root: string, sid: string, alias: string, now = Date.no
 			// to whichever session happened to heartbeat last.
 			return { aliases: entry.aliases, conflict: `${alias} is also set on ${owner[0]} — contested alias does not resolve; use session ids` };
 		}
-		if (!entry.aliases.some(a => a.toLowerCase() === alias.toLowerCase())) entry.aliases.push(alias);
+		// One alias per session: the last one set wins (replaces any previous).
+		entry.aliases = [alias];
 		entry.lastSeen = now;
 		writeRegistry(root, data);
 		return { aliases: entry.aliases };
