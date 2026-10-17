@@ -88,6 +88,20 @@ describe("formatBundle", () => {
 		expect(plainText).toContain("reply with msg_reply"); // trailer still teaches the default
 	});
 
+	it("subject renders as its own bold line between header and body; absent subject skips it", () => {
+		const f = frame("a", ["me"], "the body text", { subject: "merge check", inReplyTo: "mRoot99" });
+		const text = formatBundle({ from: "a", frames: [f] }, fr => fr.body, s => s);
+		expect(text).toContain(`[mail from a (re: mRoot99) | id: ${f.id}]`); // threading stays in the header
+		expect(text).toContain("**merge check**");
+		expect(text.indexOf(`id: ${f.id}`)).toBeLessThan(text.indexOf("**merge check**"));
+		expect(text.indexOf("**merge check**")).toBeLessThan(text.indexOf("the body text"));
+
+		const plain = frame("a", ["me"], "no subject body");
+		const plainText = formatBundle({ from: "a", frames: [plain] }, fr => fr.body, s => s);
+		expect(plainText).not.toContain("**");
+		expect(plainText).toContain("no subject body");
+	});
+
 	it("broadcast frames get a reply-to-sender-only suffix; direct frames do not advertise all=true", () => {
 		const direct = frame("a", ["me"], "just you");
 		const directText = formatBundle({ from: "a", frames: [direct] }, f => f.body, s => s);
