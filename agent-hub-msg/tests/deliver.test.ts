@@ -117,4 +117,20 @@ describe("formatBundle", () => {
 		const allText = formatBundle({ from: "a", frames: [all] }, f => f.body, s => s);
 		expect(allText).toContain("reply to the sender only");
 	});
+
+	it("alias suffix comes from the sid's random part — never the sess- prefix", () => {
+		// Short/vanity ids: slicing the raw sid used to leak the prefix or its
+		// hyphen (`alice (-alice)`, `bob (ss-bob)`). The suffix strips `sess-`
+		// first, so the alias disambiguator stays clean.
+		for (const [sid, alias, suffix] of [
+			["sess-alice", "alice", "alice"],
+			["sess-bob", "bob", "bob"],
+			["sess-e87aadf3", "carol", "7aadf3"],
+			["sess-06232cc2", "dave", "232cc2"],
+		] as const) {
+			const f = frame(sid, ["sess-me"], "hi", { fromAlias: alias });
+			const text = formatBundle({ from: sid, frames: [f] }, f2 => f2.body, s => s);
+			expect(text.split("\n")[0]).toContain(`from ${alias} (${suffix})**`);
+		}
+	});
 });

@@ -69,6 +69,18 @@ function threadOf(frame: MailFrame): string {
 }
 
 /**
+ * Short disambiguating suffix of a session id, shown beside an alias, e.g.
+ * `alice (aadf3)`. Strips the `sess-` prefix first so the suffix comes from
+ * the id's RANDOM part, then takes its tail. A bare `slice(-6)` on a short or
+ * vanity sid (`sess-alice`) would swallow the hyphen and print `(-alice)`;
+ * removing the prefix and guarding a leftover leading hyphen avoids that.
+ */
+function shortSid(sid: string): string {
+	const body = sid.replace(/^sess-/i, "");
+	return body.slice(-6).replace(/^-+/, "") || body;
+}
+
+/**
  * Format a bundle as one injectable prompt block. `resolve` returns the full
  * text of a frame (splicing spool bodies); `describe` renders a session id as
  * a human name (alias preferred).
@@ -89,7 +101,7 @@ export function formatBundle(
 	const sender = describe(bundle.from);
 	const label =
 		sender === bundle.from && bundle.frames[0]?.fromAlias
-			? `${bundle.frames[0].fromAlias} (${bundle.from.slice(-6)})`
+			? `${bundle.frames[0].fromAlias} (${shortSid(bundle.from)})`
 			: sender;
 	lines.push(
 		`# **${n} ${n === 1 ? "mail" : "mails"} from ${label}** *[agent mail v${ETIQUETTE_VERSION} — reply via msg_reply]*${opts.stale ? " *[STALE — thread inactive past the freshness window: reference only, do not act unless the user asks.]*" : ""}`,
