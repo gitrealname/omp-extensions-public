@@ -215,17 +215,26 @@ describe("ack fan-out suppression", () => {
 	it("a bare ack bypasses the hop cap — thread closure is always reachable", () => {
 		const me = "0197aaaaaaaa7ff3c00000000003";
 		const peer = "0197aaaaaaaa7ff4c00000000004";
-		const { replyMail } = require("../core/api") as typeof import("../core/api");
+		const { replyMail, sendMail } = require("../core/api") as typeof import("../core/api");
 		// A deep-thread frame lands in my mailbox (hops already at the cap).
 		const deep = frame(peer, [me], "six hops deep");
 		deep.hops = 6;
 		deliverMail(root, me, deep);
+		markRead(root, me, deep.id); // reminders only cover consumed (delivered+read) mail
 
-		// Substantive reply: refused at the cap.
-		expect(() => replyMail(root, { sid: me }, { id: deep.id, body: "still working" })).toThrow(/reply cap/);
-		// Bare ack: allowed at ANY depth — it closes the thread.
+		// Substantive reply: refused at the cap — and the refusal names the
+		// recovery path (new thread + bare ack), because the original stays
+		// pending until that ack lands.
+		expect(() => replyMail(root, { sid: me }, { id: deep.id, body: "still working" })).toThrow(/new thread.*bare ack/);
+		// The refused reply leaves the original pending — a reminder would resurface it.
+		expect(pendingFor(root, me, me).map(f => f.id)).toContain(deep.id);
+		// A new-thread answer (no inReplyTo) does NOT close the original.
+		sendMail(root, { sid: me }, { to: peer, body: "full answer", subject: "closure" });
+		expect(pendingFor(root, me, me).map(f => f.id)).toContain(deep.id);
+		// Bare ack: allowed at ANY depth — it closes the thread and clears the reminder.
 		const closing = replyMail(root, { sid: me }, { id: deep.id, body: "ack", ack: true });
 		expect(closing.text).toContain("replied to");
+		expect(pendingFor(root, me, me).map(f => f.id)).not.toContain(deep.id);
 		// And the ack it produced can never be answered (refusal is checked first).
 		const ackFrame = readMailbox(root, peer).frames.find(f => f.ack)!;
 		expect(() => replyMail(root, { sid: peer }, { id: ackFrame.id, body: "ok", ack: true })).toThrow(/bare ack/);

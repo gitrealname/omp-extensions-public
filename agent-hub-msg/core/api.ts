@@ -95,7 +95,7 @@ function buildFrame(
 	// above is checked FIRST, so an ack can never extend a chain at any depth),
 	// but thread closure must always be reachable. MAX_HOPS bounds conversation
 	// depth, not closing signals.
-	if (!ack && hops > MAX_HOPS) throw new Error(`thread depth ${hops} exceeds the ${MAX_HOPS}-hop reply cap`);
+	if (!ack && hops > MAX_HOPS) throw new Error(`thread depth ${hops} exceeds the ${MAX_HOPS}-hop reply cap — answer via a new thread (msg_send with a fresh subject), then send a bare ack to this message id so it closes`);
 	const id = Snowflake.next();
 	const spooled = spoolBody(root, id, body);
 	return {
