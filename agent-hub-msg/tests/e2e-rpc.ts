@@ -17,6 +17,24 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
+
+// Mirror the real launch chain: the `o` launcher passes `--config <overlay>`,
+// which supplies the working modelRoles (the bare global config.yml's default
+// model may be a disabled OpenRouter preset). Parse the overlay path from the
+// launcher so the agents run the same model config as real sessions.
+const LAUNCHER = "C:/Users/common/.bun/bin/o";
+const EXTRA_ARGS = (() => {
+	try {
+		const m = fs.readFileSync(LAUNCHER, "utf8").match(/--config\s+(\S+)/);
+		if (!m) return [];
+		// The launcher is a bash script: MSYS rewrites /d/... at exec time. Bun
+		// spawns omp directly, so convert the MSYS path to a Windows path here.
+		const p = m[1].replace(/^\/([a-z])\/(.*)/i, (_, drive, rest) => `${drive.toUpperCase()}:/` + rest);
+		return ["--config", p];
+	} catch {
+		return [];
+	}
+})();
 const OMP = process.argv[2] ?? "omp";
 const ROOT = path.join(os.tmpdir(), `agent-hub-msg-e2e-${Date.now()}`);
 const DIR_A = path.join(ROOT, "alpha");
@@ -192,7 +210,7 @@ class RpcClient {
 }
 
 function spawnOmp(cwd: string, alias: string): RpcClient {
-	const proc = Bun.spawn([OMP, "--mode", "rpc"], {
+	const proc = Bun.spawn([OMP, "--mode", "rpc", ...EXTRA_ARGS], {
 		cwd,
 		env: env({ MSG_ALIAS: alias }),
 		stdin: "pipe",
@@ -366,15 +384,19 @@ async function main(): Promise<void> {
 		await waitFor(() => sessionText("alpha").split("Rules").length >= 3, "/msg instruct re-injection", 30_000);
 		console.log("✓ /msg instruct force re-injected instructions");
 
-		// 10b. doubled prefix tolerated: /msg /msg list behaves like /msg list.
+		// 10b. doubled prefix tolerated: /msg /msg list parses like /msg list.
+		// command() throws unless the prompt executed as a LOCAL command
+		// (agentInvoked: false) — that proves the doubled prefix reached the
+		// handler. The roster noise guard then suppresses re-injection of an
+		// UNCHANGED roster (by design since the etiquette pass), so assert the
+		// transcript gains no duplicate roster block.
 		console.log("A: RPC prompt → /msg /msg list (doubled prefix)");
 		await a.command("/msg /msg list");
-		await waitFor(
-			() => sessionText("alpha").split("registered agent sessions:").length - 1 >= 2,
-			"doubled-prefix /msg /msg list injection",
-			30_000,
-		);
-		console.log("✓ /msg /msg list accepted (doubled prefix tolerated)");
+		const rosterCount = sessionText("alpha").split("registered agent sessions:").length - 1;
+		if (rosterCount !== 1) {
+			throw new Error(`doubled-prefix /msg list left ${rosterCount} roster blocks — parse failed (<1) or noise guard broken (>1)`);
+		}
+		console.log("✓ /msg /msg list accepted (doubled prefix tolerated, unchanged roster not re-injected)");
 
 
 		// 11. compaction survival: force-compact A; the session_compact hook must

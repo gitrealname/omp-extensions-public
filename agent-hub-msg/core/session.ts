@@ -117,7 +117,12 @@ export class HubSession {
 				cwd: this.config.cwd,
 				machine: this.config.machine ?? os.hostname(),
 			});
-			if (this.config.seedAlias) {
+			// Seed the env-configured alias only while the session has none:
+			// setUserAlias REPLACES (one alias per session), so re-applying the
+			// seed on every register() would silently clobber an alias the user
+			// set later via /msg alias (surfaced by v18.12.2's settle-time
+			// re-registration). Seeding is a fallback, not a policy.
+			if (this.config.seedAlias && myself(this.config.root, this.sid).aliases.length === 0) {
 				setUserAlias(this.config.root, this.sid, this.config.seedAlias);
 			}
 			this.config.log?.(`registered session ${this.sid} (root ${this.config.root})`);
