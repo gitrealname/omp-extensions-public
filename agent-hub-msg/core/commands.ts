@@ -19,7 +19,8 @@ export function msgArgumentCompletions(prefix: string): CompletionItem[] | null 
 	const options: Array<{ value: string; description: string }> = [
 		{ value: "instruct", description: "re-inject mail instructions" },
 		{ value: "list", description: "list registered agent sessions" },
-		{ value: "alias ", description: "set an alias for this session" },
+		{ value: "alias ", description: "set an alias for this session (--force takes it over + moves the mailbox)" },
+		{ value: "clear", description: "drop this session's alias" },
 	];
 	return options
 		.filter(o => o.value.trim().startsWith(arg))

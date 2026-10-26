@@ -240,6 +240,49 @@ export function addAlias(root: string, sid: string, alias: string, now = Date.no
 	});
 }
 
+
+/**
+ * Take an alias away from whoever owns it and set it on this session — the
+ * deliberate handover. Under the registry lock the alias is stripped from the
+ * old owner (its list becomes empty) and set here; returns the previous owner
+ * as `movedFrom` so the caller can move the mailbox next (switch FIRST, merge
+ * SECOND — see mergeMailbox). Without an owner it behaves exactly like
+ * addAlias. The no-flag /msg alias keeps the contested-alias error: that is
+ * the typo guard; --force is the explicit "I mean it".
+ */
+export function forceAlias(root: string, sid: string, alias: string, now = Date.now()): { aliases: string[]; movedFrom?: string } {
+	return withRegistryLock(root, () => {
+		const data = readRegistry(root);
+		const entry = data[sid];
+		if (!entry) throw new Error(`agent-hub-msg: session ${sid} is not registered`);
+		let movedFrom: string | undefined;
+		for (const [other, e] of Object.entries(data)) {
+			if (other !== sid && e.aliases.some(a => a.toLowerCase() === alias.toLowerCase())) {
+				e.aliases = [];
+				e.lastSeen = now;
+				movedFrom = other;
+			}
+		}
+		entry.aliases = [alias];
+		entry.lastSeen = now;
+		writeRegistry(root, data);
+		return { aliases: entry.aliases, movedFrom };
+	});
+}
+
+/** Drop this session's user alias (empty list) — the undo for a mis-set alias. */
+export function clearAlias(root: string, sid: string, now = Date.now()): { aliases: string[] } {
+	return withRegistryLock(root, () => {
+		const data = readRegistry(root);
+		const entry = data[sid];
+		if (!entry) throw new Error(`agent-hub-msg: session ${sid} is not registered`);
+		entry.aliases = [];
+		entry.lastSeen = now;
+		writeRegistry(root, data);
+		return { aliases: entry.aliases };
+	});
+}
+
 /** Set/unset the instructed flag (instructions injected into the LLM context). */
 export function setInstructed(root: string, sid: string, value: boolean, now = Date.now(), instructionsHash?: string): void {
 	withRegistryLock(root, () => {

@@ -11,7 +11,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { batchBySender, formatBundle, type Bundle } from "./deliver";
-import { instructionsText, markInstructed, myself, pendingReminder, relativeAge, setUserAlias } from "./api";
+import { formatRoster, instructionsText, markInstructed, myself, pendingReminder, setUserAlias } from "./api";
 import { listSessions, registerSession, resolveAddress, setInstructed, heartbeat as registryHeartbeat } from "./registry";
 import { duplicateOf, markAnswered, markDelivered, readMailbox, resolveBody, setInlineMax, threadActivity, unreadFor } from "./mailbox";
 
@@ -420,18 +420,8 @@ export class HubSession {
 	 * churn mid-turn must not re-anchor the agent's attention. `changed` is
 	 * false when the identical text was injected since this boot.
 	 */
-	listText(): { text: string; changed: boolean } {
-		const now = Date.now();
-		const rows = listSessions(this.config.root, now).map(({ sid, entry, live }) => {
-			const status = live ? "" : " (offline)";
-			const aliases = entry.aliases.length > 0 ? ` [${entry.aliases.join(", ")}]` : "";
-			// pid: live processes continue sessions via `-c`, so two frontends can
-			// share one sid — the registry keeps only the last registrant's pid,
-			// which makes a flickering pid the visible symptom of sharing.
-			const pid = entry.pid !== undefined ? ` pid ${entry.pid}` : "";
-			return `${sid}${pid} ${relativeAge(entry.lastSeen, now)}${aliases} (${entry.cwd})${status}`;
-		});
-		const text = `registered agent sessions:\n${rows.join("\n") || "(none)"}`;
+	listText(full = false): { text: string; changed: boolean } {
+		const text = formatRoster(this.config.root, { showPid: true, full, header: "registered agent sessions:" });
 		const hash = hashOf(text);
 		const changed = hash !== this.lastRosterHash;
 		this.lastRosterHash = hash;

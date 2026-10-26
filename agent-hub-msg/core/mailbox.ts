@@ -51,6 +51,63 @@ export interface MailboxState {
 
 export const MAX_READ_IDS = 1000;
 
+/**
+ * Move-merge one session's mailbox into another (alias handover). Idempotent:
+ * frames missing from the target are appended in source order (dedupe by id —
+ * ids are globally unique; a collision keeps the target's copy), then state
+ * merges (deliveredUpTo = max; readIds/answeredIds = ordered union capped at
+ * MAX_READ_IDS). The source inbox files are removed after a clean merge;
+ * spooled bodies live in the shared files/ dir and need no move.
+ *
+ * Callers must switch the alias in the registry FIRST and merge SECOND: the
+ * merge is idempotent, so a crash between the two steps self-heals on the next
+ * run, while the reverse order could strand a delivery that raced into the old
+ * inbox between merge and switch.
+ */
+export function mergeMailbox(root: string, fromSid: string, toSid: string): { moved: number; skipped: number } {
+	for (const sid of [fromSid, toSid]) {
+		if (!validSid(sid)) throw new Error(`agent-hub-msg: invalid session id ${JSON.stringify(String(sid).slice(0, 80))}`);
+	}
+	if (fromSid === toSid) return { moved: 0, skipped: 0 };
+	const { frames: src } = readMailbox(root, fromSid);
+	const { indexById: dstIndex } = readMailbox(root, toSid);
+	let moved = 0;
+	let skipped = 0;
+	for (const frame of src) {
+		if (dstIndex.has(frame.id)) {
+			skipped++;
+			continue;
+		}
+		deliverMail(root, toSid, frame);   // mkdir + torn-tail safety; does not touch state
+		moved++;
+	}
+	const a = readState(root, toSid);
+	const b = readState(root, fromSid);
+	const cap = (base: string[], extra: string[]): string[] => {
+		const seen = new Set(base);
+		const merged = [...base];
+		for (const id of extra) {
+			if (!seen.has(id)) {
+				seen.add(id);
+				merged.push(id);
+			}
+		}
+		return merged.length > MAX_READ_IDS ? merged.slice(merged.length - MAX_READ_IDS) : merged;
+	};
+	writeState(root, toSid, {
+		deliveredUpTo: Math.max(a.deliveredUpTo, b.deliveredUpTo),
+		readIds: cap(a.readIds, b.readIds),
+		answeredIds: cap(a.answeredIds, b.answeredIds),
+	});
+	try {
+		fs.rmSync(mboxPath(root, fromSid), { force: true });
+		fs.rmSync(statePath(root, fromSid), { force: true });
+		fs.rmdirSync(inboxDir(root, fromSid), { recursive: true });
+	} catch {}
+	return { moved, skipped };
+}
+
+
 /** Registry sids flow into filesystem paths — and registry.json is writable by
  *  any local process. Enforce a safe shape at the boundary and defensively at
  *  every path join. */

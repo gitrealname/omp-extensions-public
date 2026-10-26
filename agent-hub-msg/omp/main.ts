@@ -176,7 +176,7 @@ export default function agentHubMsgExtension(pi: ExtensionAPI): void {
 	// ── /msg commands ────────────────────────────────────────────────────────
 
 	pi.registerCommand("msg", {
-		description: "Inter-agent mail: /msg | /msg instruct | /msg list | /msg alias <name>",
+		description: "Inter-agent mail: /msg | instruct | list | alias <name> [--force] | clear",
 		getArgumentCompletions: msgArgumentCompletions,
 		handler: async (args, ctx) => {
 			rememberSessionId(ctx);
@@ -197,7 +197,8 @@ export default function agentHubMsgExtension(pi: ExtensionAPI): void {
 					break;
 				}
 				case "list": {
-					const { text, changed } = session.listText();
+					const full = rest.some(t => /^(all|--all)$/i.test(t));
+					const { text, changed } = session.listText(full);
 					ctx.ui.notify(changed ? text : `${text}\n(unchanged since last shown — not re-injected)`, "info");
 					if (changed) {
 						pi.sendMessage({ customType: "agent-hub-msg-list", content: text, display: true, attribution: "user" });
@@ -205,18 +206,27 @@ export default function agentHubMsgExtension(pi: ExtensionAPI): void {
 					break;
 				}
 				case "alias": {
-					const name = rest.join(" ").trim();
+					const raw = rest.join(" ").trim();
+					const force = /(^|\s)--force(\s|$)/i.test(raw);
+					const name = raw.replace(/--force/gi, "").trim();
 					if (!name) {
-						ctx.ui.notify("usage: /msg alias <name>", "warning");
+						ctx.ui.notify("usage: /msg alias <name> [--force]", "warning");
 						return;
 					}
-					const res = api.setUserAlias(MSG_ROOT, me().sid, name);
+					const res = api.setUserAlias(MSG_ROOT, me().sid, name, force);
 					session.register(); // refresh lastSeen while we hold a valid session
 					ctx.ui.notify(res.text, res.details?.conflict ? "warning" : "info");
 					break;
 				}
+				case "clear": {
+					const target = rest.join(" ").trim();
+					const res = api.clearUserAlias(MSG_ROOT, me().sid, target || undefined);
+					session.register();
+					ctx.ui.notify(res.text, "info");
+					break;
+				}
 				default:
-					ctx.ui.notify(`unknown subcommand "${sub}" — /msg | instruct | list | alias <name>`, "warning");
+					ctx.ui.notify(`unknown subcommand "${sub}" — /msg | instruct | list | alias <name> [--force] | clear`, "warning");
 			}
 		},
 	});

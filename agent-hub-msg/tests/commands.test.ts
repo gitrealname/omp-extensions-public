@@ -5,7 +5,7 @@ describe("/msg argument completions", () => {
 	it("empty prefix → all subcommands as bare values", () => {
 		const items = msgArgumentCompletions("");
 		expect(items).not.toBeNull();
-		expect(items!.map(i => i.value).sort()).toEqual(["alias ", "instruct", "list"]);
+		expect(items!.map(i => i.value).sort()).toEqual(["alias ", "clear", "instruct", "list"]);
 		// Contract: the TUI replaces the argument text with `value` — values
 		// must never include the command line itself (regression: "/msg list"
 		// as value produced "/msg /msg list" on acceptance).

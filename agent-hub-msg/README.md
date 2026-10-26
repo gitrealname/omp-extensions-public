@@ -59,8 +59,11 @@ The LLM knows nothing about messaging until:
 |---|---|
 | `/msg` | Activate mail tools; inject instructions once |
 | `/msg instruct` | Force re-inject instructions (after compaction) |
-| `/msg list` | Show + inject `<session_id> pid <n> <last_seen> [aliases] (cwd)` for all sessions |
-| `/msg alias <name>` | Add an alias to this session (repeatable) |
+| `/msg list` | Roster: aliased sessions first (most recent first), then live, then the 5 most recent offline — the dormant tail collapses into `+N hidden`. `/msg list all` lists everything |
+| `/msg alias <name>` | Set this session's alias. Taking an alias another session owns creates a contested alias (does not resolve) — the typo guard |
+| `/msg alias <name> --force` | Handover: strip the alias from the old owner, set it here, and MOVE+MERGE that mailbox (frames dedupe by id; read/answered state unions; spooled bodies follow). Switch-then-merge order makes it crash-safe |
+| `/msg clear` | Drop this session's alias |
+| `/msg clear <id\|prefix\|alias>` | Drop ANOTHER session's alias — how old/dead sessions get cleaned up |
 
 Every `/msg` command guarantees activation (tools + instructions on first
 contact); a doubled prefix (`/msg /msg list`) is tolerated. A flickering `pid`

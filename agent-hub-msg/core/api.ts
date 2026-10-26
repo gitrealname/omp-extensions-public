@@ -23,7 +23,8 @@ import {
 	windowFrames,
 	type MailFrame,
 } from "./mailbox";
-import { addAlias, expandTo, listSessions, REGISTRY_STALE_AFTER_MS, setInstructed } from "./registry";
+import { addAlias, clearAlias, expandTo, forceAlias, listSessions, REGISTRY_STALE_AFTER_MS, resolveAddress, setInstructed } from "./registry";
+import { mergeMailbox } from "./mailbox";
 import { Snowflake } from "./id";
 
 /** The calling session's identity. */
@@ -203,35 +204,99 @@ export function readMail(root: string, sid: string, id: string): ToolResult {
 	return { text: `[from ${describe(root, frame.from, sid)}]\n${resolveBody(root, frame)}` };
 }
 
-export function whoami(root: string, sid: string): ToolResult {
+
+// ── Roster rendering (shared by /msg list and msg_who) ─────────────────────
+
+/** Offline entries shown before the "+N dormant hidden" summary line. */
+export const ROSTER_OFFLINE_SHOWN = 5;
+
+/**
+ * One compact, scannable roster:
+ *   aliased sessions FIRST (most recent activity first),
+ *   then non-aliased live (most recent first),
+ *   then offline — capped at ROSTER_OFFLINE_SHOWN, the rest collapses into a
+ *   single "+N dormant hidden" line. `full=true` lists everything (escape
+ *   hatch: /msg list all).
+ */
+export function formatRoster(
+	root: string,
+	opts: { viewerSid?: string; full?: boolean; showPid?: boolean; header?: string } = {},
+): string {
 	const now = Date.now();
-	const rows = listSessions(root, now)
-		.filter(r => r.sid !== sid)
-		.map(({ sid: other, entry, live }) => {
-			// Display-only staleness — entries are never evicted, but a month-old
-			// offline entry is noise unless flagged as such.
-			const status = live
-				? ""
-				: now - entry.lastSeen > REGISTRY_STALE_AFTER_MS
-					? " (stale — offline 30d+)"
-					: " (offline — mail will wait)";
-			const aliases = entry.aliases.length > 0 ? ` [${entry.aliases.join(", ")}]` : "";
-			return `${other} ${relativeAge(entry.lastSeen, now)}${aliases} (${entry.cwd})${status}`;
-		});
-	const mine = myself(root, sid);
-	const myAliases = mine.aliases.length > 0 ? ` [${mine.aliases.join(", ")}]` : "";
-	return { text: `you are: ${sid}${myAliases}\n${rows.join("\n")}` };
+	const sessions = listSessions(root, now).filter(r => !opts.viewerSid || r.sid !== opts.viewerSid);
+	const row = (r: (typeof sessions)[number]): string => {
+		const { entry, live } = r;
+		const status = live
+			? ""
+			: now - entry.lastSeen > REGISTRY_STALE_AFTER_MS
+				? " (stale — offline 30d+)"
+				: " (offline — mail will wait)";
+		const aliases = entry.aliases.length > 0 ? ` [${entry.aliases.join(", ")}]` : "";
+		const pid = opts.showPid && entry.pid !== undefined ? ` pid ${entry.pid}` : "";
+		return `${r.sid}${pid} ${relativeAge(entry.lastSeen, now)}${aliases} (${entry.cwd})${status}`;
+	};
+	const byRecency = (a: (typeof sessions)[number], b: (typeof sessions)[number]) => b.entry.lastSeen - a.entry.lastSeen;
+	const aliased = sessions.filter(r => r.entry.aliases.length > 0).sort(byRecency);
+	const liveBare = sessions.filter(r => r.entry.aliases.length === 0 && r.live).sort(byRecency);
+	const offline = sessions.filter(r => r.entry.aliases.length === 0 && !r.live).sort(byRecency);
+	const rows: string[] = [...aliased, ...liveBare].map(row);
+	const shownOffline = opts.full ? offline : offline.slice(0, ROSTER_OFFLINE_SHOWN);
+	for (const r of shownOffline) rows.push(row(r));
+	const hidden = offline.length - shownOffline.length;
+	if (hidden > 0) rows.push(`+ ${hidden} dormant (offline) hidden — /msg list all to see every session`);
+	const header = opts.header ?? "registered agent sessions:";
+	return `${header}\n${rows.join("\n") || "(none)"}`;
 }
 
-/** /msg alias <name> — set a user alias on this session. */
-export function setUserAlias(root: string, sid: string, name: string): ToolResult {
+export function whoami(root: string, sid: string): ToolResult {
+	const mine = myself(root, sid);
+	const myAliases = mine.aliases.length > 0 ? ` [${mine.aliases.join(", ")}]` : "";
+	return { text: `you are: ${sid}${myAliases}\n${formatRoster(root, { viewerSid: sid })}` };
+}
+
+/** /msg alias <name> — set a user alias on this session. With force=true, take
+ *  the alias away from another session and move+merge that mailbox here. */
+export function setUserAlias(root: string, sid: string, name: string, force = false): ToolResult {
+	if (force) {
+		const moved = forceAlias(root, sid, name);
+		let text = `aliases: ${moved.aliases.join(", ")}`;
+		if (moved.movedFrom) {
+			const r = mergeMailbox(root, moved.movedFrom, sid);
+			text += ` — moved from ${moved.movedFrom} (${r.moved} frame(s) moved, ${r.skipped} duplicate(s) skipped); its pending mail is now yours`;
+		}
+		return { text, details: { movedFrom: moved.movedFrom } };
+	}
 	const res = addAlias(root, sid, name);
 	return {
 		text: res.conflict
-			? `${res.conflict} — your aliases: ${res.aliases.join(", ")}`
+			? `${res.conflict} — your aliases: ${res.aliases.join(", ")} (use /msg alias ${name} --force to take it over)`
 			: `aliases: ${res.aliases.join(", ")}`,
 		details: { conflict: res.conflict },
 	};
+}
+
+/** /msg clear [<session-id|prefix|alias>] — drop a session's alias. Bare form
+ *  clears MY alias; with a target it clears ANOTHER session's — old/dead
+ *  sessions must be cleanable without booting them. */
+export function clearUserAlias(root: string, sid: string, target?: string): ToolResult {
+	if (!target || target.trim() === sid) return clearMine(root, sid);
+	const res = resolveAddress(root, target, Date.now());
+	if (res.error || !res.address) return { text: res.error ?? `no such agent "${target}"` };
+	const other = res.address.sid;
+	if (other === sid) return clearMine(root, sid);
+	const before = res.address.entry.aliases;
+	const out = clearAlias(root, other);
+	return {
+		text: out.aliases.length
+			? `${other}: aliases now ${out.aliases.join(", ")}`
+			: `${other}: alias cleared (was ${before.join(", ") || "none"}) — addressed by session id only`,
+		details: { cleared: other },
+	};
+}
+
+function clearMine(root: string, sid: string): ToolResult {
+	const res = clearAlias(root, sid);
+	return { text: res.aliases.length ? `aliases: ${res.aliases.join(", ")}` : "alias cleared — addressed by session id only" };
 }
 
 /** Instructions text for a session (fresh read; leading H1 stripped). */
