@@ -314,8 +314,16 @@ export function markInstructed(root: string, sid: string, instructionsHash?: str
  * item → full body spliced; several → headers + previews (msg_read for full
  * text). Returns null when nothing is pending.
  */
-export function pendingReminder(root: string, sid: string, max = 5): ToolResult | null {
-	const pending = pendingFor(root, sid, sid);
+/** Default reminder age floor: 30 min of silence = nothing to report. */
+export const REMIND_AGE_MS_DEFAULT = 1800000;
+
+export function pendingReminder(root: string, sid: string, max = 5, minAgeMs = 1800000): ToolResult | null {
+	const pending = pendingFor(root, sid, sid)
+		// Silence-by-default etiquette: a fresh unanswered message may simply
+		// need no answer — only nag after the age floor, so short-lived
+		// silence is never interrupted, but genuinely dropped/forgotten mail
+		// still resurfaces. 0 disables the floor.
+		.filter(f => minAgeMs <= 0 || Date.now() - Date.parse(f.ts) >= minAgeMs);
 	if (pending.length === 0) return null;
 	const selected = pending.slice(0, max);
 	const lines: string[] = [

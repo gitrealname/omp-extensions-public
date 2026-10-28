@@ -11,7 +11,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { batchBySender, formatBundle, type Bundle } from "./deliver";
-import { formatRoster, instructionsText, markInstructed, myself, pendingReminder, setUserAlias } from "./api";
+import { formatRoster, instructionsText, markInstructed, myself, pendingReminder, REMIND_AGE_MS_DEFAULT, setUserAlias } from "./api";
 import { listSessions, registerSession, resolveAddress, setInstructed, heartbeat as registryHeartbeat } from "./registry";
 import { duplicateOf, markAnswered, markDelivered, readMailbox, resolveBody, setInlineMax, threadActivity, unreadFor } from "./mailbox";
 
@@ -225,7 +225,9 @@ export class HubSession {
 	async remindPending(): Promise<void> {
 		if (this.stopped || !this.sid || this.config.env("MSG_REMIND")?.toLowerCase() === "off") return;
 		const max = Number(this.config.env("MSG_REMIND_MAX") ?? 5);
-		const reminder = pendingReminder(this.config.root, this.sid, Number.isFinite(max) ? max : 5);
+		const minAgeRaw = this.config.env("MSG_REMIND_AGE_MS");
+		const minAge = minAgeRaw === undefined || minAgeRaw.trim() === "" ? REMIND_AGE_MS_DEFAULT : Number(minAgeRaw);
+		const reminder = pendingReminder(this.config.root, this.sid, Number.isFinite(max) ? max : 5, Number.isFinite(minAge) ? minAge : REMIND_AGE_MS_DEFAULT);
 		if (!reminder) return;
 		// The agent needs the tools to answer — activate silently.
 		if (!this.activated) await this.activate(false).catch(() => {});

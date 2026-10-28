@@ -29,6 +29,7 @@ import {
 import {
 	deliverMail,
 	mergeMailbox,
+	markDelivered,
 	readMailbox,
 	readState,
 	resolveBody,
@@ -51,8 +52,8 @@ afterEach(() => {
 const meta = (pid: number, cwd = `C:/w/${pid}`) => ({ pid, cwd, machine: "test" });
 const S = (n: number) => `0197aaaaaaaa7ff${n}c0000000000${n}`;
 
-function frame(id: string, from = S(9), to: string[] = [S(2)], body = `body ${id}`) {
-	return { id, ts: "2026-10-21T12:00:00", from, to, body };
+function frame(id: string, from = S(9), to: string[] = [S(2)], body = `body ${id}`, ts = new Date().toISOString()) {
+	return { id, ts, from, to, body };
 }
 
 describe("forceAlias", () => {
@@ -274,5 +275,63 @@ describe("formatRoster", () => {
 		const text = formatRoster(root, { viewerSid: S(2), full: true });
 		expect(text).not.toContain("[worker]");
 		expect(text).toContain("[old]");
+	});
+});
+
+// ---- etiquette v4: broadcast targets + reminder age floor -------------------
+
+import { expandTo } from "../core/registry";
+import { pendingReminder, REMIND_AGE_MS_DEFAULT } from "../core/api";
+
+describe("expandTo broadcast targets", () => {
+	function seedLive() {
+		registerSession(root, S(1), meta(100), Date.now());
+		registerSession(root, S(2), meta(200), Date.now());
+		addAlias(root, S(1), "named");
+		registerSession(root, S(3), meta(300), Date.now() - 10 * 60 * 1000); // offline bare
+	}
+
+	it("aliased -> only live aliased others", () => {
+		seedLive();
+		const { to, skipped } = expandTo(root, "aliased", S(2));
+		expect(to).toEqual([S(1)]);
+		expect(skipped).toEqual([]);
+	});
+
+	it("bare -> only live bare others (offline excluded)", () => {
+		seedLive();
+		const { to, skipped } = expandTo(root, "bare", S(1));
+		expect(to).toEqual([S(2)]);
+		expect(skipped).toEqual([]);
+	});
+
+	it("aliased with empty pool -> skip reason", () => {
+		registerSession(root, S(1), meta(100), Date.now());
+		const { to, skipped } = expandTo(root, "aliased", S(1));
+		expect(to).toEqual([]);
+		expect(skipped[0].reason).toContain("aliased");
+	});
+
+	it("all unchanged: live others regardless of alias", () => {
+		seedLive();
+		const { to } = expandTo(root, "all", S(3));
+		expect(to.sort()).toEqual([S(1), S(2)].sort());
+	});
+});
+
+describe("pendingReminder age floor", () => {
+	it("fresh unanswered mail is NOT nagged (silence by default)", async () => {
+		registerSession(root, S(1), meta(100), Date.now());
+		deliverMail(root, S(1), frame("m-fresh", S(2), [S(1)]));
+		markDelivered(root, S(1), ["m-fresh"]);
+		expect(pendingReminder(root, S(1), 5, REMIND_AGE_MS_DEFAULT)).toBeNull();
+	});
+
+	it("old unanswered mail resurfaces", async () => {
+		registerSession(root, S(1), meta(100), Date.now());
+		const oldTs = new Date(Date.now() - REMIND_AGE_MS_DEFAULT - 60_000).toISOString();
+		deliverMail(root, S(1), frame("m-stale", S(2), [S(1)], `body m-stale`, oldTs));
+		markDelivered(root, S(1), ["m-stale"]);
+		expect(pendingReminder(root, S(1), 5, REMIND_AGE_MS_DEFAULT)).not.toBeNull();
 	});
 });

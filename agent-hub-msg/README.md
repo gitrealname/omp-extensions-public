@@ -73,7 +73,7 @@ in `/msg list` between snapshots means two frontends share one session id
 ## Agent-side tools
 
 - `msg_who` — your address + every registered session (online/offline derived from last-seen; offline 30d+ shows `stale`; entries are never evicted)
-- `msg_send` — `to` (session id, unique prefix, alias, comma list, or `"all"`), `body`, optional `subject`, `inReplyTo`, `ack`
+- `msg_send` — `to` (session id, unique prefix, alias, comma list, or one of the broadcast targets `"all"` / `"aliased"` / `"bare"`), `body`, optional `subject`, `inReplyTo`, `ack`
 - `msg_reply` — **by message id only**; recipients are derived from the thread (`all: true` = reply-all, ignored for acks)
 - `msg_inbox` — subjects + previews (never full bodies; `msg_read` pulls those); unread only by default, `{ read: true, since, limit }` for history
 - `msg_read` — full body of one message id
@@ -146,6 +146,7 @@ Agent instructions live in [`agent-hub-msg-llm-instructions.md`](./agent-hub-msg
 | `MSG_INLINE_MAX` | `255` | Body chars before spooling to file |
 | `MSG_REMIND` | on | `off` disables unanswered-mail reminders |
 | `MSG_REMIND_MAX` | `5` | Max pending items in one reminder block |
+| `MSG_REMIND_AGE_MS` | `1800000` | Reminder age floor — unanswered mail is nagged only after this age (silence by default). `0` = nag on next cycle |
 | `MSG_DEDUPE_MS` | `120000` | Duplicate-send suppression window (0 = off) |
 | `MSG_STALE_ACT_MS` | `10800000` | Thread-inactivity age before inert delivery (0 = off) |
 | `MSG_INSTRUCTIONS` | `<ext>/agent-hub-msg-llm-instructions.md` | LLM instructions file path |

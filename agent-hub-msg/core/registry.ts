@@ -346,19 +346,26 @@ export function resolveAddress(root: string, key: string, now = Date.now()): { a
 }
 
 /**
- * Expand a recipient spec: comma/space-separated keys, or "all" — which
- * resolves to every OTHER currently-online session (dormant sessions must not
- * accumulate broadcast mail). Direct keys address offline sessions too
- * (mail queues, email-style).
+ * Expand a recipient spec: comma/space-separated keys, or one of the
+ * registry-level broadcast targets:
+ *   "all"     — every OTHER currently-online session (dormant sessions must
+ *               not accumulate broadcast mail);
+ *   "aliased" — every OTHER live session that HAS a user alias (the curated
+ *               pool: named agents only, skips scratch/test sessions);
+ *   "bare"    — every OTHER live session with NO alias (the complement).
+ * Direct keys address offline sessions too (mail queues, email-style).
  */
 export function expandTo(root: string, spec: string, me: string, now = Date.now()): { to: string[]; skipped: { key: string; reason: string }[] } {
 	const skipped: { key: string; reason: string }[] = [];
 	let keys: string[];
-	if (spec.trim().toLowerCase() === "all") {
+	const target = spec.trim().toLowerCase();
+	if (target === "all" || target === "aliased" || target === "bare") {
 		keys = listSessions(root, now)
 			.filter(r => r.sid !== me && r.live)
+			.filter(r => (target === "aliased" ? r.entry.aliases.length > 0 : target === "bare" ? r.entry.aliases.length === 0 : true))
 			.map(r => r.sid);
-		if (keys.length === 0) skipped.push({ key: "all", reason: "no other agents online" });
+		if (keys.length === 0)
+			skipped.push({ key: target, reason: target === "all" ? "no other agents online" : `no other live ${target === "aliased" ? "aliased" : "bare"} sessions` });
 	} else {
 		keys = spec.split(/[,\s]+/).filter(Boolean);
 	}

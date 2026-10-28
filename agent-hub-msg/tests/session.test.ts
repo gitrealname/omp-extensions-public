@@ -29,7 +29,7 @@ interface Injected {
 
 function makeSession(overrides: { env?: Record<string, string>; activateTools?: () => Promise<void> } = {}) {
 	const injections: Injected[] = [];
-	const envTable = overrides.env ?? {};
+	const envTable = { MSG_REMIND_AGE_MS: "0", ...overrides.env };
 	const session = new HubSession({
 		root,
 		cwd: "C:/w/a",

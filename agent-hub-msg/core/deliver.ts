@@ -18,7 +18,7 @@ export const MAX_HOPS = 6;
  *  or the envelope format changes materially so operators/agents can tell which
  *  rule set a session holds. v3: anchor line (bold count+sender, italic stamp),
  *  per-frame subject line with italic metadata bracket. */
-export const ETIQUETTE_VERSION = 3;
+export const ETIQUETTE_VERSION = 4;
 
 export interface Bundle {
 	from: string;
