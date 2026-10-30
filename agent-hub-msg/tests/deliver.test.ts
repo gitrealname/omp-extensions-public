@@ -62,7 +62,7 @@ describe("formatBundle", () => {
 		expect(text).toContain("x".repeat(400)); // full body spliced in
 		expect(text).toContain("short one");
 		expect(text).toContain("# **2 mails from alpha**"); // count lives in the anchor
-		expect(text).toMatch(/#\s\*\*2 mails from alpha\*\* \*\[agent mail v\d+ — reply via msg_reply\]\*/); // italic stamp rides the anchor
+		expect(text).toMatch(/#\s\*\*2 mails from alpha\*\* \*\[agent mail v\d+ — reply via msg_reply\(id: <the id>\)\]\*/); // italic stamp rides the anchor (v5: names the id param)
 		expect(text).toContain(`## (no subject) *[id: ${f1.id}]*`); // no-subject placeholder keeps the shape uniform
 		expect(text).toContain(`## (no subject) *[id: ${f2.id} | re: ${f1.id.slice(-8)}]*`);
 		expect(text).not.toContain("reply with msg_reply using the id");

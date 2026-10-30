@@ -17,8 +17,10 @@ export const MAX_HOPS = 6;
 /** Etiquette version, stamped on every delivered envelope. Bump when the rules text
  *  or the envelope format changes materially so operators/agents can tell which
  *  rule set a session holds. v3: anchor line (bold count+sender, italic stamp),
- *  per-frame subject line with italic metadata bracket. */
-export const ETIQUETTE_VERSION = 4;
+ *  per-frame subject line with italic metadata bracket. v5: anchor names the
+ *  reply parameter (msg_reply(id: <the id>)) after models repeatedly blended
+ *  msg_send's shape into msg_reply and dropped replies. */
+export const ETIQUETTE_VERSION = 5;
 
 export interface Bundle {
 	from: string;
@@ -104,7 +106,7 @@ export function formatBundle(
 			? `${bundle.frames[0].fromAlias} (${shortSid(bundle.from)})`
 			: sender;
 	lines.push(
-		`# **${n} ${n === 1 ? "mail" : "mails"} from ${label}** *[agent mail v${ETIQUETTE_VERSION} — reply via msg_reply]*${opts.stale ? " *[STALE — thread inactive past the freshness window: reference only, do not act unless the user asks.]*" : ""}`,
+		`# **${n} ${n === 1 ? "mail" : "mails"} from ${label}** *[agent mail v${ETIQUETTE_VERSION} — reply via msg_reply(id: <the id>)]*${opts.stale ? " *[STALE — thread inactive past the freshness window: reference only, do not act unless the user asks.]*" : ""}`,
 	);
 	for (const frame of bundle.frames) {
 		lines.push(frameLine(frame));

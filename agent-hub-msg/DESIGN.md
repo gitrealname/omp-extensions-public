@@ -28,7 +28,7 @@ delivery-mode line — never in the standing rules.
 A delivered bundle is one prompt block:
 
 ```
-# **2 mails from alice (578a8a)** *[agent mail v3 — reply via msg_reply]*                       ← anchor (per bundle: bold count+sender, italic provenance stamp; the full rules live in the injected instructions block; STALE suffix rides this line when stale)
+# **2 mails from alice (578a8a)** *[agent mail v5 — reply via msg_reply(id: <the id>)]*                ← anchor (per bundle: bold count+sender, italic provenance stamp — v5 names the reply parameter after models blended msg_send's shape into msg_reply and dropped replies; the full rules live in the injected instructions block; STALE suffix rides this line when stale)
 ## subject *[id: … | re: … | reply: none — ack closes the thread]*                              ← frame line (per frame; subject or `(no subject)` placeholder; italic bracket = id is the reply address, re: thread root, reply: duty deviation)
 <body — spliced in full; long bodies spooled but shown inline>                                   ← body
 (broadcast to 3 agents: reply to the sender only, never all=true.)                              ← trailer — fan-out only; every other bundle ends at the last body
@@ -70,6 +70,9 @@ none has standing rules text beyond the one-line reference above.
 | Instruction drift | rules file hashed each poll tick; change → one re-injection | silent |
 | Context cost | no injection of any kind until first mail contact | silent |
 | Reentrancy | `delivering` flag across activation round-trips; one bundle per tick | silent |
+| Stale-sid reply | `replyMail` follows the sender alias's **current holder** when the frame's raw `from` sid is no longer the holder (fork handover: alias force-moved after the frame arrived); other thread members keep literal sids | `rerouted: <stale> (stale) → <new> — current holder of alias "…"` |
+| Offline send | send/reply to a registered-but-offline sid appends a liveness note (mail still queues, email-style) | `<sid> registered but offline 5m+ — mail will wait for it to come back` |
+| Send-shaped reply | `msg_reply` accepts `inReplyTo` as an alias for the required `id` (models blend msg_send's shape and omit `id`); missing both → guidance, never a dropped reply | guidance text |
 
 ## Delivery model
 

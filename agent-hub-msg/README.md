@@ -74,7 +74,7 @@ in `/msg list` between snapshots means two frontends share one session id
 
 - `msg_who` — your address + every registered session (online/offline derived from last-seen; offline 30d+ shows `stale`; entries are never evicted)
 - `msg_send` — `to` (session id, unique prefix, alias, comma list, or one of the broadcast targets `"all"` / `"aliased"` / `"bare"`), `body`, optional `subject`, `inReplyTo`, `ack`
-- `msg_reply` — **by message id only**; recipients are derived from the thread (`all: true` = reply-all, ignored for acks)
+- `msg_reply` — **by message id only**; recipients are derived from the thread (`all: true` = reply-all, ignored for acks). The reply follows the sender alias's **current holder**: if the alias was force-moved to a newer session after the frame arrived (fork handover), the reply reroutes to the new holder (stale raw sid would silently swallow it) and the result says so. Replying to / sending to a registered-but-offline session appends a `registered but offline 5m+` note — mail still queues. `inReplyTo` is accepted as an alias for `id` (self-heals send-style calls that omit `id`).
 - `msg_inbox` — subjects + previews (never full bodies; `msg_read` pulls those); unread only by default, `{ read: true, since, limit }` for history
 - `msg_read` — full body of one message id
 
@@ -103,9 +103,12 @@ closed. `MSG_DEDUPE_MS=0` disables.
 **Instruction drift:** the instructions file is hashed at every injection; a
 changed file is re-injected on the next poll tick (no restart, no compaction
 needed). Every delivered envelope opens with an anchor line —
-`# **N mails from <sender>** *[agent mail vN — reply via msg_reply]*` — the
+`# **N mails from <sender>** *[agent mail v5 — reply via msg_reply(id: <the id>)]*` — the
 full rules are NOT repeated per delivery (they are guaranteed in context:
-first contact, post-compaction re-inject, drift refresh).
+first contact, post-compaction re-inject, drift refresh). The anchor names the
+reply parameter: models repeatedly blended msg_send's shape into msg_reply
+(id omitted, send-style keys passed), dropping replies — v5 makes the required
+argument visible on every envelope.
 
 **Stale threads are read, never acted on:** a thread whose latest activity
 (including frames already delivered) is older than `MSG_STALE_ACT_MS`

@@ -105,18 +105,39 @@ export default function agentHubMsgExtension(pi: ExtensionAPI): void {
 	pi.registerTool({
 		name: "msg_reply",
 		label: "Reply to mail",
-		description: "Reply to a received message by id — recipients derived from the thread (all=true = reply-all)",
+		description:
+			"Reply to a received message by id — recipients derived from the thread (all=true = reply-all). `id` = the id from the mail header (accepts inReplyTo as an alias)",
 		approval: "write",
 		defaultInactive: true,
 		parameters: Type.Object({
-			id: Type.String({ description: "message id being replied to" }),
+			id: Type.Optional(
+				Type.String({ description: "message id being replied to (the `id:` value from the mail header)" }),
+			),
+			inReplyTo: Type.Optional(
+				Type.String({ description: "alias for `id` — accepted so send-style calls still route correctly" }),
+			),
 			body: Type.String(),
 			all: Type.Optional(Type.Boolean({ description: "reply-all instead of sender-only" })),
 			ack: Type.Optional(Type.Boolean({ description: "bare acknowledgment — no answer expected back" })),
 		}),
 		async execute(_id, params, _signal, _onUpdate, ctx) {
 			rememberSessionId(ctx);
-			const res = api.replyMail(MSG_ROOT, me(), params);
+			// Models blend msg_send's shape into msg_reply (id omitted,
+			// send-style keys passed). Self-heal instead of dropping the
+			// reply: inReplyTo IS the id when id is absent; to/subject are
+			// ignored — recipients always come from the thread.
+			const replyId = params.id ?? params.inReplyTo;
+			if (!replyId) {
+				return {
+					content: [
+						{
+							type: "text",
+							text: "msg_reply needs `id` — the message id from the mail header (## subject *[id: …]* line). Recipients are derived from the thread; do not pass `to`.",
+						},
+					],
+				};
+			}
+			const res = api.replyMail(MSG_ROOT, me(), { ...params, id: replyId });
 			if (res.details?.to) session.scheduleFastFollow();
 			return { content: [{ type: "text", text: res.text }], details: res.details };
 		},

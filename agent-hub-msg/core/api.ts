@@ -134,6 +134,17 @@ export function sendMail(
 		delivered.length > 0 ? `sent to: ${describeList(root, delivered, me.sid)}` : "not delivered",
 		...skipped.map(s => `skipped ${s.key}: ${s.reason}`),
 	];
+	if (delivered.length > 0) {
+		// A direct key can address a dormant-but-registered session (mail
+		// queues, email-style) — say so, so a silent dead-sid send is at
+		// least visible to the sender.
+		const snapshot = listSessions(root);
+		const offline = delivered
+			.map(t => ({ sid: t, row: snapshot.find(r => r.sid === t) }))
+			.filter(x => x.row && !x.row.live)
+			.map(x => `${x.sid} registered but offline 5m+ — mail will wait for it to come back`);
+		parts.push(...offline);
+	}
 	return { text: parts.join("; "), details: { delivered, skipped } };
 }
 
@@ -152,12 +163,42 @@ export function replyMail(
 		? [...new Set([original.from, ...original.to])].filter(a => a !== me.sid && a !== "all")
 		: [original.from];
 	if (to.length === 0) return { text: "no recipients left to reply to" };
-	const frame = buildFrame(root, me, to, params.body, original.subject, params.id, params.ack);
-	for (const rcpt of to) deliverMail(root, rcpt, frame);
+	// Alias-first addressing: the sender may have force-moved its alias to a
+	// NEW session since this frame arrived (the classic fork handover) — the
+	// frame's raw `from` sid is then a stale address that silently swallows
+	// the reply. Follow the alias's CURRENT holder when one exists and
+	// differs; only reply-all keeps the original thread members as-is.
+	const rerouted: string[] = [];
+	// Compute the alias holder once — reply-all dedupes to [from, ...others],
+	// but only the sender-slot target follows the alias; other members keep
+	// their literal sids.
+	const fromAlias = original.fromAlias;
+	const aliasHolder = fromAlias
+		? listSessions(root).find(r => r.entry.aliases.includes(fromAlias))
+		: undefined;
+	const resolvedTo = to.map(target => {
+		if (target === original.from && aliasHolder && aliasHolder.sid !== original.from) {
+			rerouted.push(`${original.from} (stale) → ${aliasHolder.sid} — current holder of alias "${fromAlias}"`);
+			return aliasHolder.sid;
+		}
+		return target;
+	});
+	const frame = buildFrame(root, me, resolvedTo, params.body, original.subject, params.id, params.ack);
+	for (const rcpt of resolvedTo) deliverMail(root, rcpt, frame);
 	markAnswered(root, me.sid, [params.id]);
+	const snapshot = listSessions(root);
+	const liveness = resolvedTo
+		.map(t => ({ sid: t, row: snapshot.find(r => r.sid === t) }))
+		.filter(x => x.row && !x.row.live)
+		.map(x => `${x.sid} registered but offline 5m+ — mail will wait for it to come back`);
+	const parts = [
+		`replied to ${describeList(root, resolvedTo, me.sid)}${params.all ? ` (all: ${describeList(root, resolvedTo, me.sid)})` : ""}`,
+		...rerouted.map(r => `rerouted: ${r}`),
+		...liveness,
+	];
 	return {
-		text: `replied to ${describe(root, original.from, me.sid)}${params.all ? ` (all: ${describeList(root, to, me.sid)})` : ""}`,
-		details: { to },
+		text: parts.join("; "),
+		details: { to: resolvedTo, ...(rerouted.length > 0 ? { rerouted } : {}) },
 	};
 }
 
