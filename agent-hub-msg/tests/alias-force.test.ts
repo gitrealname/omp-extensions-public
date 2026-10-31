@@ -121,6 +121,20 @@ describe("mergeMailbox", () => {
 		expect(fs.existsSync(path.join(root, "inboxes", S(1)))).toBe(false);
 	});
 
+	it("normalizes frames addressed to the source sid (readable after the move)", () => {
+		registerSession(root, S(1), meta(100));
+		registerSession(root, S(2), meta(200));
+		// Mail that raced into the old inbox addressed to the OLD sid (e.g. a
+		// sender answered the full stale session id before the alias move).
+		deliverMail(root, S(1), frame("m-old", S(9), [S(1)]));
+		mergeMailbox(root, S(1), S(2));
+
+		const { frames } = readMailbox(root, S(2));
+		const moved = frames.find(f => f.id === "m-old")!;
+		expect(moved.to).toEqual([S(2)]); // rewritten to the new holder
+		// and the poller's filter now matches: to.includes(S(2))
+	});
+
 	it("is idempotent: a second run moves nothing", () => {
 		registerSession(root, S(1), meta(100));
 		registerSession(root, S(2), meta(200));

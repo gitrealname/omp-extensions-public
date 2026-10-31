@@ -78,7 +78,14 @@ export function mergeMailbox(root: string, fromSid: string, toSid: string): { mo
 			skipped++;
 			continue;
 		}
-		deliverMail(root, toSid, frame);   // mkdir + torn-tail safety; does not touch state
+		// Frames addressed to the source sid were readable only while the old
+		// inbox existed. After the move they would fail the poller's
+		// to.includes(current sid) filter forever — invisible mail. Rewrite the
+		// recipient slot so the merged history reads under the new holder.
+		const normalized = frame.to.includes(fromSid)
+			? { ...frame, to: frame.to.map(t => (t === fromSid ? toSid : t)) }
+			: frame;
+		deliverMail(root, toSid, normalized); // mkdir + torn-tail safety; does not touch state
 		moved++;
 	}
 	const a = readState(root, toSid);
