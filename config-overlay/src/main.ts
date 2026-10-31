@@ -57,6 +57,16 @@ export default function (pi: ExtensionAPI): void {
         const overlayArg = pi.getFlag("config-overlay");
         if (!overlayArg) return;
 
+        // open-sdk runtime required: plain upstream builds have no pi.openSdk
+        // namespace. Degrade with a clear message instead of throwing.
+        if (!pi.openSdk) {
+            const msg =
+                "[config-overlay] requires an omp build with open-sdk (pi.openSdk is unavailable on this runtime) — overlay skipped";
+            log.warn(msg);
+            ctx.ui.notify(msg, "error");
+            return;
+        }
+
         // Resolve path: absolute as-is, relative → agent dir (same as config.yml)
         const agentDir = pi.openSdk.settings.getAgentDir();
         const resolved = path.isAbsolute(overlayArg)

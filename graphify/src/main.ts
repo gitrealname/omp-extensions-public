@@ -68,11 +68,19 @@ function createProxy(
     deepMode: boolean,
     onFirstChunk?: () => void,
 ): Promise<ProxyHandle | null> {
+    if (!complete) {
+        pi.logger.warn("[graphify] proxy needs open-sdk (pi.openSdk unavailable on this runtime)");
+        return Promise.resolve(null);
+    }
     return anthropicProxyServer(complete, pi, ctx, deepMode, onFirstChunk);
 }
 
 // Bound labeler — `complete` captured once from open-sdk.
 function label(pi: { logger: PiLogger }, ctx: CommandContext, targetPath: string): Promise<void> {
+    if (!complete) {
+        pi.logger.warn("[graphify] label needs open-sdk (pi.openSdk unavailable on this runtime)");
+        return Promise.resolve();
+    }
     return labelCommunities(complete, pi, ctx, targetPath);
 }
 
@@ -81,7 +89,10 @@ function label(pi: { logger: PiLogger }, ctx: CommandContext, targetPath: string
 
 export default function (pi: ExtensionAPI): void {
     // Get complete from pi.openSdk — clean namespace for open-sdk exports.
-    complete = pi.openSdk.complete as CompleteFn;
+    // Plain upstream builds have no pi.openSdk; degrade instead of failing load:
+    // graph/session features still work, /graphify label+proxy need open-sdk.
+    complete = (pi as { openSdk?: { complete?: unknown } }).openSdk
+        ?.complete as CompleteFn | undefined ?? undefined;
     const log = pi.logger;
     const onDemand = process.env.GRAPHIFY_ON_DEMAND === "1";
     let remindedThisSession = false;
