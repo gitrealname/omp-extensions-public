@@ -229,10 +229,16 @@ export class HubSession {
 		const minAge = minAgeRaw === undefined || minAgeRaw.trim() === "" ? REMIND_AGE_MS_DEFAULT : Number(minAgeRaw);
 		const reminder = pendingReminder(this.config.root, this.sid, Number.isFinite(max) ? max : 5, Number.isFinite(minAge) ? minAge : REMIND_AGE_MS_DEFAULT);
 		if (!reminder) return;
+		// One-shot reminder (v6): the reminder never repeats. The reminded
+		// frames are marked answered the moment the nudge goes out — the
+		// agent answers them in THIS turn or lets them close in silence.
+		if (reminder.details && Array.isArray(reminder.details.ids)) {
+			markAnswered(this.config.root, this.sid, reminder.details.ids as string[]);
+		}
 		// The agent needs the tools to answer — activate silently.
 		if (!this.activated) await this.activate(false).catch(() => {});
 		this.config.inject(reminder.text, { customType: "agent-hub-msg-reminder", display: true, triggerTurn: true });
-		this.config.log?.(`reminder injected (${reminder.details?.count} pending)`);
+		this.config.log?.(`reminder injected (${reminder.details?.count} pending, closed)`);
 	}
 
 	// ── Delivery ─────────────────────────────────────────────────────────────
@@ -252,10 +258,26 @@ export class HubSession {
 		};
 		// Duplicate-send guard: harness-level tool retries re-execute sends with a
 		// fresh id — identical content must not re-anchor a turn or re-open a
-		// thread an ack already closed. Marked delivered silently.
+		// thread already closed. Marked delivered silently.
 		const windowMs = parseMs("MSG_DEDUPE_MS", 120_000);
+		// Cold-start auto-close (v6): mail that sat unread for an hour+ (a
+		// restart after the agent was away) is context the fresh session has
+		// no use for — close it silently instead of dumping a stale backlog
+		// into the conversation. MSG_COLD_START_MS (default 3_600_000); 0
+		// disables.
+		const coldMs = parseMs("MSG_COLD_START_MS", 3_600_000);
+		if (coldMs > 0) {
+			const now = Date.now();
+			const cold = fresh.filter(f => now - Date.parse(f.ts) >= coldMs);
+			if (cold.length > 0) {
+				markDelivered(this.config.root, sid, cold.map(f => f.id));
+				markAnswered(this.config.root, sid, cold.map(f => f.id));
+				this.config.log?.(`cold-start auto-closed ${cold.length} stale mail (>= ${coldMs} ms old)`);
+			}
+		}
 		const pending: typeof fresh = [];
 		for (const frame of fresh) {
+			if (coldMs > 0 && Date.now() - Date.parse(frame.ts) >= coldMs) continue; // closed above
 			if (windowMs > 0 && duplicateOf(this.config.root, sid, frame, windowMs)) {
 				// Answered, not just delivered — a suppressed duplicate must never
 				// resurface as a pending reminder for mail the agent never saw.

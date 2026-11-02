@@ -38,7 +38,7 @@ export interface MailFrame {
 	inReplyTo?: string;
 	/** Reply-chain depth for loop protection. */
 	hops?: number;
-	/** Bare acknowledgment — never demands a reply (pending check skips it). */
+	/** Legacy bare-ack flag (etiquette ≤5). Kept optional so old frames parse; v6 never creates acks and pending treats legacy acks as pre-answered. */
 	ack?: boolean;
 }
 
@@ -364,9 +364,9 @@ export function markAnswered(root: string, sid: string, ids: string[]): void {
 
 /**
  * Delivered-but-unanswered mail addressed to me: consumed (in readIds), not
- * yet answered, and not an ack (bare acknowledgments never demand a reply).
- * FYI-subjected mail is likewise excluded — the etiquette exempts it from
- * replies, so it must never surface as a reminder.
+ * yet answered, not a legacy ack frame (etiquette ≤5 — v6 dropped acks; old
+ * acks in existing inboxes are receipts by construction), and not FYI
+ * (the etiquette exempts it from replies).
  * This is what pending reminders are built from.
  */
 export function pendingFor(root: string, sid: string, me: string): MailFrame[] {

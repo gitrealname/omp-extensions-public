@@ -73,37 +73,43 @@ in `/msg list` between snapshots means two frontends share one session id
 ## Agent-side tools
 
 - `msg_who` — your address + every registered session (online/offline derived from last-seen; offline 30d+ shows `stale`; entries are never evicted)
-- `msg_send` — `to` (session id, unique prefix, alias, comma list, or one of the broadcast targets `"all"` / `"aliased"` / `"bare"`), `body`, optional `subject`, `inReplyTo`, `ack`
-- `msg_reply` — **by message id only**; recipients are derived from the thread (`all: true` = reply-all, ignored for acks). The reply follows the sender alias's **current holder**: if the alias was force-moved to a newer session after the frame arrived (fork handover), the reply reroutes to the new holder (stale raw sid would silently swallow it) and the result says so. Replying to / sending to a registered-but-offline session appends a `registered but offline 5m+` note — mail still queues. `inReplyTo` is accepted as an alias for `id` (self-heals send-style calls that omit `id`).
+- `msg_send` — `to` (session id, unique prefix, alias, comma list, or one of the broadcast targets `"all"` / `"aliased"` / `"bare"`), `body`, optional `subject`, `inReplyTo`
+- `msg_reply` — **by message id only**; recipients are derived from the thread (`all: true` = reply-all). The reply follows the sender alias's **current holder**: if the alias was force-moved to a newer session after the frame arrived (fork handover), the reply reroutes to the new holder (stale raw sid would silently swallow it) and the result says so. Replying to / sending to a registered-but-offline session appends a `registered but offline 5m+` note — mail still queues. `inReplyTo` is accepted as an alias for `id` (self-heals send-style calls that omit `id`).
 - `msg_inbox` — subjects + previews (never full bodies; `msg_read` pulls those); unread only by default, `{ read: true, since, limit }` for history
 - `msg_read` — full body of one message id
 
-**Acknowledgments & etiquette (extension-enforced):** bare acks are sent with
-`ack: true` and need no reply; acks always go to the sender only — `all` is
-ignored. An ack closes the thread on both sides: the tool layer **refuses any
-reply whose `inReplyTo` targets an ack frame** (ack-of-ack guard), so acks
-also bypass the 6-hop reply cap — terminal by construction, they can never
-extend a chain, and thread closure stays reachable at any depth. Broadcast
-frames (multiple recipients) deliver with a "reply to the sender only" suffix
-so N×N ack storms cannot form. Mail with subject starting `FYI:` requests no
-reply and is exempt from unanswered-mail reminders.
+**Silence-closes etiquette (v6, extension-enforced):** there are no
+acknowledgment messages. Answer when you have something to report; silence
+means "received, nothing to add", and a read message without an answer closes
+on its own. A mail-reminder fires **once** per message — the reminder marks
+the reminded frames answered as it goes out, so the nudge never repeats
+(answer now, or let the thread close in silence). Mail with subject starting
+`FYI:` requests no reply and is exempt from reminders. The 6-hop reply cap
+applies to all replies (terminal threads close in silence, not by ack);
+`msg_reply` defaults to sender-only — `all: true` is for answers that
+genuinely need every thread participant (rule 13).
 
 **Unanswered-mail reminders:** mail delivered but never answered
 (`answeredIds` in `state.json`) is re-injected after compaction and on
 restore (`triggerTurn`) so an agent that forgot — e.g. context compacted
-mid-task — wakes and answers. `ack: true` and `FYI:`-subjected frames are
-exempt.
+mid-task — wakes and answers. **One-shot per message**: reminding marks the
+frames answered, so the same message never nags twice. `FYI:`-subjected
+frames are exempt.
+
+**Cold-start auto-close:** unread mail older than `MSG_COLD_START_MS`
+(default 1 h) at a delivery tick — e.g. a restart after the agent was away —
+is marked delivered+answered and **never injected**: a fresh session gets no
+stale backlog dump. `MSG_COLD_START_MS=0` disables.
 
 **Duplicate-send guard:** harness-level tool retries can re-execute a send
 with a fresh id. Identical content (same sender, thread, subject, body
 prefix) within `MSG_DEDUPE_MS` (default 120 s) is marked delivered+answered
-silently — it never re-anchors a turn and cannot re-open a thread an ack
-closed. `MSG_DEDUPE_MS=0` disables.
+silently — it never re-anchors a turn. `MSG_DEDUPE_MS=0` disables.
 
 **Instruction drift:** the instructions file is hashed at every injection; a
 changed file is re-injected on the next poll tick (no restart, no compaction
 needed). Every delivered envelope opens with an anchor line —
-`# **N mails from <sender>** *[agent mail v5 — reply via msg_reply(id: <the id>)]*` — the
+`# **N mails from <sender>** *[agent mail v6 — reply via msg_reply(id: <the id>)]*` — the
 full rules are NOT repeated per delivery (they are guaranteed in context:
 first contact, post-compaction re-inject, drift refresh). The anchor names the
 reply parameter: models repeatedly blended msg_send's shape into msg_reply
@@ -151,6 +157,7 @@ Agent instructions live in [`agent-hub-msg-llm-instructions.md`](./agent-hub-msg
 | `MSG_REMIND_MAX` | `5` | Max pending items in one reminder block |
 | `MSG_REMIND_AGE_MS` | `1800000` | Reminder age floor — unanswered mail is nagged only after this age (silence by default). `0` = nag on next cycle |
 | `MSG_DEDUPE_MS` | `120000` | Duplicate-send suppression window (0 = off) |
+| `MSG_COLD_START_MS` | `3600000` | Unread mail older than this at a delivery tick is auto-closed, never injected (0 = off) |
 | `MSG_STALE_ACT_MS` | `10800000` | Thread-inactivity age before inert delivery (0 = off) |
 | `MSG_INSTRUCTIONS` | `<ext>/agent-hub-msg-llm-instructions.md` | LLM instructions file path |
 | `OMP_EXTENSION_DEBUG` | – | `1` enables debug logging |

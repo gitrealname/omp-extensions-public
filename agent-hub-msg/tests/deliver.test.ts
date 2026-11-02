@@ -69,10 +69,11 @@ describe("formatBundle", () => {
 		expect(text).not.toContain("(2 messages from alpha.)"); // count trailer retired — anchor owns it
 	});
 
-	it("reply: field rides the italic bracket — ack and FYI flag none, deep threads flag user-only, plain mail omits it", () => {
+	it("reply: field rides the italic bracket — FYI flags none, deep threads flag user-only, legacy acks and plain mail omit it", () => {
+		// Legacy ack frame (etiquette ≤5 inbox residue): rendered like plain mail.
 		const ack = frame("a", ["me"], "ack", { ack: true });
 		const ackText = formatBundle({ from: "a", frames: [ack] }, f => f.body, s => s);
-		expect(ackText).toContain(`## (no subject) *[id: ${ack.id} | reply: none — ack closes the thread]*`);
+		expect(ackText).toContain(`## (no subject) *[id: ${ack.id}]*`);
 
 		const fyi = frame("a", ["me"], "the numbers", { subject: "FYI: census" });
 		const fyiText = formatBundle({ from: "a", frames: [fyi] }, f => f.body, s => s);

@@ -342,7 +342,7 @@ describe("stale-thread split", () => {
 	};
 
 	it("a thread with no activity in the window is delivered inert: shown, never woken, answered", async () => {
-		const { session, injections } = makeSession();
+		const { session, injections } = makeSession({ env: { MSG_COLD_START_MS: "0" } });
 		const old = deliverOnly("stale work request", { ts: new Date(Date.now() - 4 * 60 * 60_000).toISOString() });
 		await session.deliverPending();
 		const hot = injections.filter(i => i.opts.customType === "agent-hub-msg");
@@ -356,7 +356,7 @@ describe("stale-thread split", () => {
 	});
 
 	it("a fresh reply keeps the whole thread hot — old frame in it delivers normally", async () => {
-		const { session, injections } = makeSession();
+		const { session, injections } = makeSession({ env: { MSG_COLD_START_MS: "0" } });
 		const old = deliverOnly("old question", { ts: new Date(Date.now() - 5 * 60 * 60_000).toISOString() });
 		const fresh = deliverOnly("and my follow-up", { inReplyTo: old.id }); // thread active now
 		await session.deliverPending();
@@ -369,7 +369,7 @@ describe("stale-thread split", () => {
 	});
 
 	it("more than 10 stale frames: newest 10 shown inert, rest collapse into a digest line", async () => {
-		const { session, injections } = makeSession();
+		const { session, injections } = makeSession({ env: { MSG_COLD_START_MS: "0" } });
 		const frames = Array.from({ length: 12 }, (_, i) =>
 			deliverOnly(`stale item ${i}`, { ts: new Date(Date.now() - (5 + i) * 60 * 60_000).toISOString() }),
 		);
@@ -386,7 +386,7 @@ describe("stale-thread split", () => {
 	});
 
 	it("MSG_STALE_ACT_MS=0 disables the split — everything delivers hot", async () => {
-		const { session, injections } = makeSession({ env: { MSG_STALE_ACT_MS: "0" } });
+		const { session, injections } = makeSession({ env: { MSG_STALE_ACT_MS: "0", MSG_COLD_START_MS: "0" } });
 		deliverOnly("ancient request", { ts: new Date(Date.now() - 7 * 24 * 60 * 60_000).toISOString() });
 		await session.deliverPending();
 		expect(injections.filter(i => i.opts.customType === "agent-hub-msg")).toHaveLength(1);
@@ -394,9 +394,70 @@ describe("stale-thread split", () => {
 	});
 
 	it("malformed MSG_STALE_ACT_MS falls back to the default (stale split stays active)", async () => {
-		const { session, injections } = makeSession({ env: { MSG_STALE_ACT_MS: "abc" } });
+		const { session, injections } = makeSession({ env: { MSG_STALE_ACT_MS: "abc", MSG_COLD_START_MS: "0" } });
 		deliverOnly("ancient request", { ts: new Date(Date.now() - 4 * 60 * 60_000).toISOString() });
 		await session.deliverPending();
 		expect(injections.some(i => i.opts.customType === "agent-hub-msg-stale")).toBe(true);
+	});
+});
+
+describe("cold-start auto-close (v6)", () => {
+	const deliverOnly = (body: string, extra: Partial<MailFrame> = {}): MailFrame => {
+		const f: MailFrame = { id: `m${Math.random().toString(36).slice(2, 10)}`, ts: new Date().toISOString(), from: PEER, to: [SID], body, ...extra };
+		deliverMail(root, SID, f);
+		return f;
+	};
+	const answeredIds = (): Set<string> => {
+		const state = JSON.parse(fs.readFileSync(path.join(root, "inboxes", SID, "state.json"), "utf-8")) as { answeredIds: string[] };
+		return new Set(state.answeredIds);
+	};
+
+	it("unread mail older than 1h is auto-closed: delivered+answered, never injected", async () => {
+		const { session, injections } = makeSession();
+		const old = deliverOnly("stale backlog", { ts: new Date(Date.now() - 90 * 60_000).toISOString() });
+		const fresh = deliverOnly("just now");
+		await session.deliverPending();
+		const bundles = injections.filter(i => i.opts.customType === "agent-hub-msg");
+		expect(bundles).toHaveLength(1);
+		expect(bundles[0].content).toContain(fresh.id);
+		expect(bundles[0].content).not.toContain(old.id);
+		expect(answeredIds()).toContain(old.id);
+	});
+
+	it("MSG_COLD_START_MS=0 disables auto-close — the backlog delivers", async () => {
+		const { session, injections } = makeSession({ env: { MSG_COLD_START_MS: "0" } });
+		const old = deliverOnly("keep me", { ts: new Date(Date.now() - 90 * 60_000).toISOString() });
+		await session.deliverPending();
+		const bundles = injections.filter(i => i.opts.customType === "agent-hub-msg");
+		expect(bundles).toHaveLength(1);
+		expect(bundles[0].content).toContain(old.id);
+	});
+
+	it("malformed MSG_COLD_START_MS falls back to the default (auto-close stays active)", async () => {
+		const { session, injections } = makeSession({ env: { MSG_COLD_START_MS: "abc" } });
+		const old = deliverOnly("stale backlog", { ts: new Date(Date.now() - 90 * 60_000).toISOString() });
+		await session.deliverPending();
+		expect(injections).toHaveLength(0);
+		expect(answeredIds()).toContain(old.id);
+	});
+});
+
+describe("one-shot reminder (v6)", () => {
+	const deliverToMe = (from: string, body: string): MailFrame => {
+		const f: MailFrame = { id: `m${Math.random().toString(36).slice(2, 10)}`, ts: new Date().toISOString(), from, to: [SID], body };
+		deliverMail(root, SID, f);
+		markDelivered(root, SID, [f.id]);
+		return f;
+	};
+
+	it("reminder marks its frames answered — the same mail never nags twice", async () => {
+		const { session, injections } = makeSession({ env: { MSG_REMIND_AGE_MS: "0" } });
+		const mail = deliverToMe(PEER, "please answer this");
+		await session.remindPending();
+		const reminders = injections.filter(i => i.opts.customType === "agent-hub-msg-reminder");
+		expect(reminders).toHaveLength(1);
+		expect(reminders[0].content).toContain(mail.id);
+		await session.remindPending();
+		expect(injections.filter(i => i.opts.customType === "agent-hub-msg-reminder")).toHaveLength(1); // still one — closed
 	});
 });

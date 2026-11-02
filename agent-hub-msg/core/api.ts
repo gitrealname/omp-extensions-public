@@ -82,21 +82,17 @@ function buildFrame(
 	body: string,
 	subject: string | undefined,
 	inReplyTo: string | undefined,
-	ack: boolean | undefined,
+	// v6 dropped acks — a stray `ack` key from an older agent's muscle memory
+	// must fail loudly instead of silently meaning nothing.
+	legacy?: Record<string, unknown>,
 ): MailFrame {
+	if (legacy && "ack" in legacy && legacy.ack !== undefined) {
+		throw new Error("ack was removed in etiquette v6 — there are no acknowledgment messages; silence is the receipt");
+	}
 	const parent = inReplyTo ? findFrame(root, me.sid, inReplyTo) : undefined;
 	if (inReplyTo && !parent) throw new Error(`message ${inReplyTo} not in this mailbox — reply only to mail you received`);
-	if (parent?.ack) {
-		throw new Error(
-			`message ${inReplyTo} is a bare ack — acks close the thread on both sides; never reply to an ack. To add a verdict or follow-up, reply to the ORIGINAL message of that thread instead (siblings of an ack are fine), or start a new thread`,
-		);
-	}
 	const hops = nextHops(parent);
-	// Acks bypass the cap: terminal BY CONSTRUCTION (the ack-of-ack refusal
-	// above is checked FIRST, so an ack can never extend a chain at any depth),
-	// but thread closure must always be reachable. MAX_HOPS bounds conversation
-	// depth, not closing signals.
-	if (!ack && hops > MAX_HOPS) throw new Error(`thread depth ${hops} exceeds the ${MAX_HOPS}-hop reply cap — answer via a new thread (msg_send with a fresh subject), then send a bare ack to this message id so it closes`);
+	if (hops > MAX_HOPS) throw new Error(`thread depth ${hops} exceeds the ${MAX_HOPS}-hop reply cap — answer via a new thread (msg_send with a fresh subject); silence closes the old one`);
 	const id = Snowflake.next();
 	const spooled = spoolBody(root, id, body);
 	return {
@@ -109,7 +105,6 @@ function buildFrame(
 		...(spooled.bodyFile ? { bodyFile: spooled.bodyFile } : {}),
 		...(subject ? { subject } : {}),
 		...(inReplyTo ? { inReplyTo } : {}),
-		...(ack ? { ack: true } : {}),
 		hops,
 	};
 }
@@ -119,12 +114,12 @@ function buildFrame(
 export function sendMail(
 	root: string,
 	me: Me,
-	params: { to: string; body: string; subject?: string; inReplyTo?: string; ack?: boolean },
+	params: { to: string; body: string; subject?: string; inReplyTo?: string },
 ): ToolResult {
 	const { to, skipped } = expandTo(root, params.to, me.sid);
 	const delivered: string[] = [];
 	if (to.length > 0) {
-		const frame = buildFrame(root, me, to, params.body, params.subject, params.inReplyTo, params.ack);
+		const frame = buildFrame(root, me, to, params.body, params.subject, params.inReplyTo, params);
 		for (const rcpt of to) deliverMail(root, rcpt, frame);
 		delivered.push(...to);
 		// A fresh send referencing an id counts as answering that message.
@@ -151,15 +146,17 @@ export function sendMail(
 export function replyMail(
 	root: string,
 	me: Me,
-	params: { id: string; body: string; all?: boolean; ack?: boolean },
+	params: { id: string; body: string; all?: boolean },
 ): ToolResult {
 	const original = findFrame(root, me.sid, params.id);
 	if (!original || original.from === me.sid) {
 		return { text: `message ${params.id} not found in this mailbox` };
 	}
-	// Acks are private: they go to the sender only, never to the other thread
-	// members — even with all=true — or broadcast ack cycles storm everyone.
-	const to = params.all && !params.ack
+	// Recipients: sender only by default; all=true fans out to the whole
+	// original thread (sender + other recipients minus me). Etiquette rule 13:
+	// reply-all is for answers that genuinely need every thread participant —
+	// thread-closers and one-line receipts stay sender-only.
+	const to = params.all
 		? [...new Set([original.from, ...original.to])].filter(a => a !== me.sid && a !== "all")
 		: [original.from];
 	if (to.length === 0) return { text: "no recipients left to reply to" };
@@ -183,7 +180,7 @@ export function replyMail(
 		}
 		return target;
 	});
-	const frame = buildFrame(root, me, resolvedTo, params.body, original.subject, params.id, params.ack);
+	const frame = buildFrame(root, me, resolvedTo, params.body, original.subject, params.id, params);
 	for (const rcpt of resolvedTo) deliverMail(root, rcpt, frame);
 	markAnswered(root, me.sid, [params.id]);
 	const snapshot = listSessions(root);
@@ -380,9 +377,9 @@ export function pendingReminder(root: string, sid: string, max = 5, minAgeMs = 1
 		lines.push("");
 	}
 	lines.push(
-		"These were delivered into this conversation before but appear unanswered — reply with msg_reply (use ack:true if nothing needs adding). Nothing pending can simply be dropped.",
+		"These were delivered into this conversation before and still have no answer — answer now (msg_reply), or let them close in silence: after this one-time reminder they will not resurface. Nothing pending can simply be dropped.",
 	);
-	return { text: lines.join("\n").trim(), details: { count: pending.length } };
+	return { text: lines.join("\n").trim(), details: { count: pending.length, ids: selected.map(f => f.id) } };
 }
 
 export { INLINE_MAX };

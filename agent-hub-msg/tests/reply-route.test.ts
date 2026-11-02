@@ -164,10 +164,10 @@ describe("liveness notices", () => {
 });
 
 describe("envelope anchor names the reply parameter", () => {
-	it("v5 anchor says msg_reply(id: <the id>)", () => {
-		expect(ETIQUETTE_VERSION).toBe(5);
+	it("v6 anchor says msg_reply(id: <the id>)", () => {
+		expect(ETIQUETTE_VERSION).toBe(6);
 		const b: Bundle = { from: S(9), frames: [frame("m1", S(9), [ME], "hello")] };
 		const text = formatBundle(b, f => f.body, sid => sid);
-		expect(text).toContain(`[agent mail v5 — reply via msg_reply(id: <the id>)]`);
+		expect(text).toContain(`[agent mail v6 — reply via msg_reply(id: <the id>)]`);
 	});
 });

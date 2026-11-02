@@ -20,7 +20,7 @@ export const MAX_HOPS = 6;
  *  per-frame subject line with italic metadata bracket. v5: anchor names the
  *  reply parameter (msg_reply(id: <the id>)) after models repeatedly blended
  *  msg_send's shape into msg_reply and dropped replies. */
-export const ETIQUETTE_VERSION = 5;
+export const ETIQUETTE_VERSION = 6;
 
 export interface Bundle {
 	from: string;
@@ -49,7 +49,6 @@ export function nextHops(parent: MailFrame | undefined): number {
  * field replaces per-case rules text; the rules reference `reply:` once.
  */
 function replyField(frame: MailFrame): string {
-	if (frame.ack) return "reply: none — ack closes the thread";
 	if (isFyi(frame)) return "reply: none — FYI";
 	if ((frame.hops ?? 0) >= MAX_HOPS) return "reply: user-only — deep thread";
 	return "";

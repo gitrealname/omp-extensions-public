@@ -19,6 +19,8 @@ import {
 	windowFrames,
 	type MailFrame,
 } from "../core/mailbox";
+import { registerSession } from "../core/registry";
+import { replyMail, sendMail } from "../core/api";
 
 let root: string;
 
@@ -150,7 +152,7 @@ describe("answered flags and pending", () => {
 		markAnswered(root, "a", [unanswered.id]);
 		expect(pendingFor(root, "a", "a")).toHaveLength(0);
 
-		// An ack frame never becomes pending.
+		// Legacy ack frames (etiquette ≤5, kept for old inboxes) never nag.
 		const ack = frame("b", ["a"], "ok");
 		ack.ack = true;
 		deliverMail(root, "a", ack);
@@ -165,8 +167,8 @@ describe("answered flags and pending", () => {
 	});
 });
 
-describe("ack fan-out suppression", () => {
-	it("ack replies go to the sender only even with all=true; non-ack replies fan out", () => {
+describe("reply-all fan-out (v6: no acks, silence closes)", () => {
+	it("reply all=true fans out to every thread participant; default goes sender-only", () => {
 		const me = "0197aaaaaaaa7ff3c00000000003";
 		const peer = "0197aaaaaaaa7ff4c00000000004";
 		const other = "0197aaaaaaaa7ff5c00000000005";
@@ -174,70 +176,56 @@ describe("ack fan-out suppression", () => {
 		const bc = frame(peer, [me, other], "broadcast hello");
 		deliverMail(root, me, bc);
 		deliverMail(root, other, bc);
+		registerSession(root, me, { pid: 1, cwd: ".", machine: "t" });
+		registerSession(root, peer, { pid: 2, cwd: ".", machine: "t" });
+		registerSession(root, other, { pid: 3, cwd: ".", machine: "t" });
 
-		// ack + all=true → suppression: only the sender hears the ack.
-		const { replyMail } = require("../core/api") as typeof import("../core/api");
-		replyMail(root, { sid: me }, { id: bc.id, body: "ok", ack: true, all: true });
-		expect(readMailbox(root, peer).frames.some(f => f.body === "ok")).toBe(true);
-		expect(readMailbox(root, other).frames.some(f => f.body === "ok")).toBe(false);
+		// Default reply: sender only — the other participant hears nothing.
+		replyMail(root, { sid: me }, { id: bc.id, body: "answer to the sender" });
+		expect(readMailbox(root, peer).frames.some(f => f.body === "answer to the sender")).toBe(true);
+		expect(readMailbox(root, other).frames.some(f => f.body === "answer to the sender")).toBe(false);
 
-		// non-ack + all=true → fan-out as usual.
+		// all=true: fan-out as usual (rule 13 — only for genuinely shared answers).
 		replyMail(root, { sid: me }, { id: bc.id, body: "answer to everyone", all: true });
 		expect(readMailbox(root, peer).frames.some(f => f.body === "answer to everyone")).toBe(true);
 		expect(readMailbox(root, other).frames.some(f => f.body === "answer to everyone")).toBe(true);
 	});
 
-	it("tool layer refuses replies to ack frames (ack-of-ack guard)", () => {
+	it("ack params are rejected (v6 dropped acks)", () => {
 		const me = "0197aaaaaaaa7ff3c00000000003";
 		const peer = "0197aaaaaaaa7ff4c00000000004";
 		const original = frame(peer, [me], "question");
 		deliverMail(root, me, original);
-		// expandTo resolves recipients against the registry — register both sids
-		// so the sendMail path reaches buildFrame (where the ack guard lives).
-		const { registerSession } = require("../core/registry") as typeof import("../core/registry");
 		registerSession(root, me, { pid: 1, cwd: ".", machine: "t" });
 		registerSession(root, peer, { pid: 2, cwd: ".", machine: "t" });
-		const { replyMail, sendMail } = require("../core/api") as typeof import("../core/api");
-		const ackReply = replyMail(root, { sid: me }, { id: original.id, body: "ok", ack: true });
-		expect(ackReply.text).toContain("replied to");
-		// The ack was delivered to the ORIGINAL SENDER's mailbox (peer's) —
-		// from there it is an incoming ack that must refuse all replies.
-		const ackFrame = readMailbox(root, peer).frames.find(f => f.ack)!;
-		expect(ackFrame.from).toBe(me);
 
-		expect(() => replyMail(root, { sid: peer }, { id: ackFrame.id, body: "thanks" })).toThrow(/bare ack/);
-		// Same guard on fresh sends threading off an ack.
-		expect(() => sendMail(root, { sid: peer }, { to: me, body: "follow-up", inReplyTo: ackFrame.id })).toThrow(/bare ack/);
-		// And even an ack-to-ack is refused — threads close, full stop.
-		expect(() => replyMail(root, { sid: peer }, { id: ackFrame.id, body: "ok", ack: true })).toThrow(/bare ack/);
+		expect(() => replyMail(root, { sid: me }, { id: original.id, body: "ok", ack: true } as never)).toThrow(/ack/);
+		expect(() => sendMail(root, { sid: me }, { to: peer, body: "ok", ack: true } as never)).toThrow(/ack/);
+		// And a reply still works without the ack param.
+		const r = replyMail(root, { sid: me }, { id: original.id, body: "here is the answer" });
+		expect(r.text).toContain("replied to");
 	});
 
-	it("a bare ack bypasses the hop cap — thread closure is always reachable", () => {
+	it("hop cap applies to every reply — refusal names the new-thread recovery", () => {
 		const me = "0197aaaaaaaa7ff3c00000000003";
 		const peer = "0197aaaaaaaa7ff4c00000000004";
-		const { replyMail, sendMail } = require("../core/api") as typeof import("../core/api");
 		// A deep-thread frame lands in my mailbox (hops already at the cap).
 		const deep = frame(peer, [me], "six hops deep");
 		deep.hops = 6;
 		deliverMail(root, me, deep);
 		markRead(root, me, deep.id); // reminders only cover consumed (delivered+read) mail
 
-		// Substantive reply: refused at the cap — and the refusal names the
-		// recovery path (new thread + bare ack), because the original stays
-		// pending until that ack lands.
-		expect(() => replyMail(root, { sid: me }, { id: deep.id, body: "still working" })).toThrow(/new thread.*bare ack/);
-		// The refused reply leaves the original pending — a reminder would resurface it.
+		// Substantive reply: refused at the cap; recovery is a new thread —
+		// silence (one-shot reminder) closes the old one.
+		expect(() => replyMail(root, { sid: me }, { id: deep.id, body: "still working" })).toThrow(/new thread/);
+		// The refused reply leaves the original pending — the one-shot reminder resurfaces it.
 		expect(pendingFor(root, me, me).map(f => f.id)).toContain(deep.id);
-		// A new-thread answer (no inReplyTo) does NOT close the original.
+		// A new-thread answer (no inReplyTo) does NOT close the original; the
+		// reminder does — once — then the thread closes in silence.
 		sendMail(root, { sid: me }, { to: peer, body: "full answer", subject: "closure" });
 		expect(pendingFor(root, me, me).map(f => f.id)).toContain(deep.id);
-		// Bare ack: allowed at ANY depth — it closes the thread and clears the reminder.
-		const closing = replyMail(root, { sid: me }, { id: deep.id, body: "ack", ack: true });
-		expect(closing.text).toContain("replied to");
+		markAnswered(root, me, [deep.id]);
 		expect(pendingFor(root, me, me).map(f => f.id)).not.toContain(deep.id);
-		// And the ack it produced can never be answered (refusal is checked first).
-		const ackFrame = readMailbox(root, peer).frames.find(f => f.ack)!;
-		expect(() => replyMail(root, { sid: peer }, { id: ackFrame.id, body: "ok", ack: true })).toThrow(/bare ack/);
 	});
 });
 

@@ -31,10 +31,10 @@ function target(key: string): string {
 	return res.address!.sid;
 }
 
-function header(frame: { id: string; from: string; to: string[]; subject?: string; inReplyTo?: string; ack?: boolean; ts: string; hops?: number }, me: string): string {
+function header(frame: { id: string; from: string; to: string[]; subject?: string; inReplyTo?: string; ts: string; hops?: number }, me: string): string {
 	const sub = frame.subject ? ` — ${frame.subject}` : "";
 	const irt = frame.inReplyTo ? ` (re: ${frame.inReplyTo.slice(-8)})` : "";
-	const flags = [frame.ack ? "ack" : "", (frame.hops ?? 0) >= 6 ? "deep" : ""].filter(Boolean).join(",");
+	const flags = [(frame.hops ?? 0) >= 6 ? "deep" : ""].filter(Boolean).join(",");
 	return `${frame.id}  from ${frame.from === me ? "self" : frame.from.slice(0, 12)}  ${frame.ts}${sub}${irt}${flags ? ` [${flags}]` : ""}`;
 }
 
