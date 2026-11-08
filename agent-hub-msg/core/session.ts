@@ -13,7 +13,7 @@ import * as path from "node:path";
 import { batchBySender, formatBundle, type Bundle } from "./deliver";
 import { formatRoster, instructionsText, markInstructed, myself, pendingReminder, REMIND_AGE_MS_DEFAULT, setUserAlias } from "./api";
 import { listSessions, registerSession, resolveAddress, setInstructed, heartbeat as registryHeartbeat } from "./registry";
-import { duplicateOf, markAnswered, markDelivered, readMailbox, resolveBody, setInlineMax, threadActivity, unreadFor } from "./mailbox";
+import { duplicateOf, markAnswered, markDelivered, pendingFor, readMailbox, resolveBody, setInlineMax, threadActivity, unreadFor } from "./mailbox";
 
 /** Phrases in user input that activate the mail tools ("email" does not match).
  *  The keyword alone is not enough — the following token must RESOLVE to a
@@ -29,6 +29,10 @@ export interface InjectOptions {
 	customType: string;
 	display: boolean;
 	triggerTurn?: boolean;
+	/** Harness delivery hint: "aside" injects at the next agent step boundary
+	 *  without interrupting the in-flight tool batch (and avoids the idle
+	 *  display-path transcript rebuild in omp's TUI). */
+	deliverAs?: "aside";
 }
 
 export interface HubSessionConfig {
@@ -222,11 +226,35 @@ export class HubSession {
 	 * Delivered-but-unanswered mail: inject a reminder that wakes the agent up.
 	 * No-op when nothing is pending or reminders are disabled (MSG_REMIND=off).
 	 */
+	/** Duration knob parser: malformed values fall back to the DEFAULT
+	 *  (guard-on), matching the constructor's malformed-values philosophy.
+	 *  0 disables the knob. */
+	private parseMs(name: string, fallback: number): number {
+		const raw = this.config.env(name);
+		const n = raw === undefined || raw.trim() === "" ? fallback : Number(raw);
+		return Number.isFinite(n) ? Math.max(0, n) : fallback;
+	}
+
 	async remindPending(): Promise<void> {
 		if (this.stopped || !this.sid || this.config.env("MSG_REMIND")?.toLowerCase() === "off") return;
 		const max = Number(this.config.env("MSG_REMIND_MAX") ?? 5);
 		const minAgeRaw = this.config.env("MSG_REMIND_AGE_MS");
 		const minAge = minAgeRaw === undefined || minAgeRaw.trim() === "" ? REMIND_AGE_MS_DEFAULT : Number(minAgeRaw);
+		// Reminder aging: the same cold-start window caps how old an
+		// unanswered thread may be before it stops being worth a nudge —
+		// read-but-unanswered frames older than MSG_COLD_START_MS decay into
+		// "closed" silently instead of resurfacing (a resume after days must
+		// not dig up a week of unanswered threads).
+		const coldMs = this.parseMs("MSG_COLD_START_MS", 3_600_000);
+		if (coldMs > 0) {
+			const stale = pendingFor(this.config.root, this.sid, this.sid).filter(
+				f => Date.now() - Date.parse(f.ts) >= coldMs,
+			);
+			if (stale.length > 0) {
+				markAnswered(this.config.root, this.sid, stale.map(f => f.id));
+				this.config.log?.(`reminder aging: silently closed ${stale.length} stale threads (>= ${coldMs} ms old)`);
+			}
+		}
 		const reminder = pendingReminder(this.config.root, this.sid, Number.isFinite(max) ? max : 5, Number.isFinite(minAge) ? minAge : REMIND_AGE_MS_DEFAULT);
 		if (!reminder) return;
 		// One-shot reminder (v6): the reminder never repeats. The reminded
@@ -249,23 +277,17 @@ export class HubSession {
 		const { sid } = this.me;
 		const fresh = unreadFor(this.config.root, sid, sid);
 		if (fresh.length === 0) return;
-		// Duration knobs: malformed values fall back to the DEFAULT (guard-on),
-		// matching the constructor's malformed-values philosophy. 0 disables.
-		const parseMs = (name: string, fallback: number): number => {
-			const raw = this.config.env(name);
-			const n = raw === undefined || raw.trim() === "" ? fallback : Number(raw);
-			return Number.isFinite(n) ? Math.max(0, n) : fallback;
-		};
+		// Duration knobs come from this.parseMs (malformed → DEFAULT, 0 disables).
 		// Duplicate-send guard: harness-level tool retries re-execute sends with a
 		// fresh id — identical content must not re-anchor a turn or re-open a
 		// thread already closed. Marked delivered silently.
-		const windowMs = parseMs("MSG_DEDUPE_MS", 120_000);
+		const windowMs = this.parseMs("MSG_DEDUPE_MS", 120_000);
 		// Cold-start auto-close (v6): mail that sat unread for an hour+ (a
 		// restart after the agent was away) is context the fresh session has
 		// no use for — close it silently instead of dumping a stale backlog
 		// into the conversation. MSG_COLD_START_MS (default 3_600_000); 0
 		// disables.
-		const coldMs = parseMs("MSG_COLD_START_MS", 3_600_000);
+		const coldMs = this.parseMs("MSG_COLD_START_MS", 3_600_000);
 		if (coldMs > 0) {
 			const now = Date.now();
 			const cold = fresh.filter(f => now - Date.parse(f.ts) >= coldMs);
@@ -294,7 +316,7 @@ export class HubSession {
 		// material — delivered without waking the agent and marked answered, so
 		// old work never auto-starts but stays readable. Hot threads deliver
 		// and wake as usual.
-		const staleMs = parseMs("MSG_STALE_ACT_MS", 3 * 60 * 60_000);
+		const staleMs = this.parseMs("MSG_STALE_ACT_MS", 3 * 60 * 60_000);
 		let hot = pending;
 		let stale: typeof pending = [];
 		if (staleMs > 0) {
@@ -320,7 +342,11 @@ export class HubSession {
 				const bundle: Bundle = bundles[0];
 				this.config.inject(
 					formatBundle(bundle, frame => resolveBody(this.config.root, frame), s => this.describe(s)),
-					{ customType: "agent-hub-msg", display: true, triggerTurn: true },
+					// "aside" rides the next agent step boundary without tearing down
+					// the in-flight transcript (omp's default idle-display path
+					// rebuilds the whole chat — the unformatted-flash the TUI showed).
+					// Idle aside still starts the turn, so triggerTurn stays true.
+					{ customType: "agent-hub-msg", display: true, triggerTurn: true, deliverAs: "aside" },
 				);
 				markDelivered(this.config.root, sid, bundle.frames.map(f => f.id));
 				this.config.log?.(`delivered bundle from ${bundle.from} (${bundle.frames.length})`);

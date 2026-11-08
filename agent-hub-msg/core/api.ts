@@ -83,11 +83,15 @@ function buildFrame(
 	subject: string | undefined,
 	inReplyTo: string | undefined,
 	// v6 dropped acks — a stray `ack` key from an older agent's muscle memory
-	// must fail loudly instead of silently meaning nothing.
+	// is dropped silently here; senders surface the notice themselves (the
+	// ToolResult text explains it, so a failing call can never strand mail).
 	legacy?: Record<string, unknown>,
-): MailFrame {
+): { frame: MailFrame; notices: string[] } {
+	const notices: string[] = [];
 	if (legacy && "ack" in legacy && legacy.ack !== undefined) {
-		throw new Error("ack was removed in etiquette v6 — there are no acknowledgment messages; silence is the receipt");
+		notices.push(
+			"ignored ack: acknowledgment messages were removed in etiquette v6 — the message was sent WITHOUT it; silence is the receipt (do not retry, do not re-send)",
+		);
 	}
 	const parent = inReplyTo ? findFrame(root, me.sid, inReplyTo) : undefined;
 	if (inReplyTo && !parent) throw new Error(`message ${inReplyTo} not in this mailbox — reply only to mail you received`);
@@ -95,7 +99,7 @@ function buildFrame(
 	if (hops > MAX_HOPS) throw new Error(`thread depth ${hops} exceeds the ${MAX_HOPS}-hop reply cap — answer via a new thread (msg_send with a fresh subject); silence closes the old one`);
 	const id = Snowflake.next();
 	const spooled = spoolBody(root, id, body);
-	return {
+	const frame: MailFrame = {
 		id,
 		ts: new Date().toISOString(),
 		from: me.sid,
@@ -107,6 +111,7 @@ function buildFrame(
 		...(inReplyTo ? { inReplyTo } : {}),
 		hops,
 	};
+	return { frame, notices };
 }
 
 // ── Tool-shaped entry points ─────────────────────────────────────────────────
@@ -118,16 +123,19 @@ export function sendMail(
 ): ToolResult {
 	const { to, skipped } = expandTo(root, params.to, me.sid);
 	const delivered: string[] = [];
+	const notices: string[] = [];
 	if (to.length > 0) {
-		const frame = buildFrame(root, me, to, params.body, params.subject, params.inReplyTo, params);
+		const { frame, notices: frameNotices } = buildFrame(root, me, to, params.body, params.subject, params.inReplyTo, params);
 		for (const rcpt of to) deliverMail(root, rcpt, frame);
 		delivered.push(...to);
+		notices.push(...frameNotices);
 		// A fresh send referencing an id counts as answering that message.
 		if (params.inReplyTo) markAnswered(root, me.sid, [params.inReplyTo]);
 	}
 	const parts = [
 		delivered.length > 0 ? `sent to: ${describeList(root, delivered, me.sid)}` : "not delivered",
 		...skipped.map(s => `skipped ${s.key}: ${s.reason}`),
+		...notices,
 	];
 	if (delivered.length > 0) {
 		// A direct key can address a dormant-but-registered session (mail
@@ -180,7 +188,7 @@ export function replyMail(
 		}
 		return target;
 	});
-	const frame = buildFrame(root, me, resolvedTo, params.body, original.subject, params.id, params);
+	const { frame, notices: frameNotices } = buildFrame(root, me, resolvedTo, params.body, original.subject, params.id, params);
 	for (const rcpt of resolvedTo) deliverMail(root, rcpt, frame);
 	markAnswered(root, me.sid, [params.id]);
 	const snapshot = listSessions(root);
@@ -192,6 +200,7 @@ export function replyMail(
 		`replied to ${describeList(root, resolvedTo, me.sid)}${params.all ? ` (all: ${describeList(root, resolvedTo, me.sid)})` : ""}`,
 		...rerouted.map(r => `rerouted: ${r}`),
 		...liveness,
+		...frameNotices,
 	];
 	return {
 		text: parts.join("; "),
@@ -379,7 +388,7 @@ export function pendingReminder(root: string, sid: string, max = 5, minAgeMs = 1
 	lines.push(
 		"These were delivered into this conversation before and still have no answer — answer now (msg_reply), or let them close in silence: after this one-time reminder they will not resurface. Nothing pending can simply be dropped.",
 	);
-	return { text: lines.join("\n").trim(), details: { count: pending.length, ids: selected.map(f => f.id) } };
+	return { text: lines.join("\n").trim(), details: { count: pending.length, ids: pending.map(f => f.id) } };
 }
 
 export { INLINE_MAX };

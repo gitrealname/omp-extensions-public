@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { deliverMail, markDelivered, type MailFrame } from "../core/mailbox";
+import { deliverMail, markDelivered, pendingFor, type MailFrame } from "../core/mailbox";
 import { HubSession } from "../core/session";
 
 // Extension root — the real instructions file is loaded from here.
@@ -459,5 +459,39 @@ describe("one-shot reminder (v6)", () => {
 		expect(reminders[0].content).toContain(mail.id);
 		await session.remindPending();
 		expect(injections.filter(i => i.opts.customType === "agent-hub-msg-reminder")).toHaveLength(1); // still one — closed
+	});
+
+	it("one-shot covers ALL pending, not just the 5 shown (7 hidden ones never resurface)", async () => {
+		const { session, injections } = makeSession({ env: { MSG_REMIND_AGE_MS: "0", MSG_REMIND_MAX: "5" } });
+		const hidden: MailFrame[] = [];
+		for (let n = 0; n < 7; n++) hidden.push(deliverToMe(PEER, `hidden ${n}`)); // beyond the shown slice
+		await session.remindPending();
+		const reminders = injections.filter(i => i.opts.customType === "agent-hub-msg-reminder");
+		expect(reminders).toHaveLength(1); // ONE reminder, showing 5 of 12
+		// All 7 hidden frames were marked answered by the same one-shot.
+		for (const f of hidden) expect(pendingFor(root, SID, SID).map(x => x.id)).not.toContain(f.id);
+		await session.remindPending();
+		expect(injections.filter(i => i.opts.customType === "agent-hub-msg-reminder")).toHaveLength(1); // no second burst
+	});
+
+	it("reminder aging: read-but-unanswered frames older than MSG_COLD_START_MS silently close instead of nagging", async () => {
+		const { session, injections } = makeSession({ env: { MSG_REMIND_AGE_MS: "0", MSG_COLD_START_MS: "3600000" } });
+		const old = deliverToMe(PEER, "five days stale");
+		const fresh = deliverToMe(PEER, "twenty minutes old");
+		// Backdate the old frame past the cold-start window (patch the stored ts).
+		const backdated = new Date(Date.now() - 5 * 86_400_000).toISOString();
+		const mb = path.join(root, "inboxes", SID, "mbox.jsonl");
+		const fixed = fs
+			.readFileSync(mb, "utf-8")
+			.split("\n")
+			.map(l => (l.includes(`"${old.id}"`) ? JSON.stringify({ ...JSON.parse(l), ts: backdated }) : l));
+		fs.writeFileSync(mb, fixed.join("\n"));
+
+		await session.remindPending();
+		const reminders = injections.filter(i => i.opts.customType === "agent-hub-msg-reminder");
+		expect(reminders).toHaveLength(1);
+		expect(reminders[0].content).toContain(fresh.id); // fresh one is reminded
+		expect(reminders[0].content).not.toContain(old.id); // stale one never nagged
+		expect(pendingFor(root, SID, SID).map(x => x.id)).not.toContain(old.id); // silently closed
 	});
 });

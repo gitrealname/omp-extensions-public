@@ -137,8 +137,9 @@ Agent instructions live in [`agent-hub-msg-llm-instructions.md`](./agent-hub-msg
   those files.
 - Read cursor: unread-only views; consumed mail never resurfaces.
 - Loop protection: seen-id dedupe + 6-hop reply cap (deep threads deliver with
-  `reply: user-only — deep thread` in the header; acks are exempt and always
-  close threads).
+  `reply: user-only — deep thread` in the header; terminal threads close in
+  silence). A stray legacy `ack` param is dropped with an explanatory notice
+  in the tool result — the mail still delivers.
 - `"all"` reaches only currently-online sessions; direct mail to an offline
   session queues like real email.
 - Registry entries, mailboxes, aliases, and spool files are **permanent** —

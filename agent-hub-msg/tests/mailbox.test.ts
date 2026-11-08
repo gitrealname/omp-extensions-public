@@ -191,7 +191,7 @@ describe("reply-all fan-out (v6: no acks, silence closes)", () => {
 		expect(readMailbox(root, other).frames.some(f => f.body === "answer to everyone")).toBe(true);
 	});
 
-	it("ack params are rejected (v6 dropped acks)", () => {
+	it("stray ack params are dropped with a notice (v6.1: never strand the mail)", () => {
 		const me = "0197aaaaaaaa7ff3c00000000003";
 		const peer = "0197aaaaaaaa7ff4c00000000004";
 		const original = frame(peer, [me], "question");
@@ -199,11 +199,21 @@ describe("reply-all fan-out (v6: no acks, silence closes)", () => {
 		registerSession(root, me, { pid: 1, cwd: ".", machine: "t" });
 		registerSession(root, peer, { pid: 2, cwd: ".", machine: "t" });
 
-		expect(() => replyMail(root, { sid: me }, { id: original.id, body: "ok", ack: true } as never)).toThrow(/ack/);
-		expect(() => sendMail(root, { sid: me }, { to: peer, body: "ok", ack: true } as never)).toThrow(/ack/);
-		// And a reply still works without the ack param.
-		const r = replyMail(root, { sid: me }, { id: original.id, body: "here is the answer" });
-		expect(r.text).toContain("replied to");
+		// Legacy muscle memory sends ack:true — the mail still goes out, the
+		// ack is dropped, and the ToolResult explains what happened.
+		const r = replyMail(root, { sid: me }, { id: original.id, body: "ok", ack: true } as never);
+		expect(r.text).toContain("ignored ack");
+		expect(r.text).toMatch(/silence is the receipt/);
+		expect(readMailbox(root, peer).frames.some(f => f.body === "ok")).toBe(true);
+
+		const s = sendMail(root, { sid: me }, { to: peer, body: "status update", ack: true } as never);
+		expect(s.text).toContain("ignored ack");
+		expect(readMailbox(root, peer).frames.some(f => f.body === "status update")).toBe(true);
+
+		// A clean send without ack carries no notice.
+		const clean = replyMail(root, { sid: me }, { id: original.id, body: "here is the answer" });
+		expect(clean.text).not.toContain("ignored ack");
+		expect(clean.text).toContain("replied to");
 	});
 
 	it("hop cap applies to every reply — refusal names the new-thread recovery", () => {

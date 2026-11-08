@@ -57,9 +57,11 @@ export default function agentHubMsgExtension(pi: ExtensionAPI): void {
 		log: debug,
 		inject: (content, opts) => {
 			// Peer mail is never user-authored — attribute to "agent", not "user".
+			// deliverAs "aside" avoids the full transcript rebuild on the idle
+			// display path (the single unformatted-line flash in the TUI).
 			pi.sendMessage(
 				{ customType: opts.customType, content, display: opts.display, attribution: "agent" },
-				...(opts.triggerTurn ? [{ triggerTurn: true }] : []),
+				...(opts.triggerTurn || opts.deliverAs ? [{ triggerTurn: opts.triggerTurn === true, ...(opts.deliverAs ? { deliverAs: opts.deliverAs } : {}) }] : []),
 			);
 		},
 		activateTools: async () => {
