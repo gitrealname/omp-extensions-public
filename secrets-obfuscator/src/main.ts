@@ -17,7 +17,8 @@
  * old sessions and new sessions mask to the same label with a different tag.
  */
 
-import { describeMappings, loadConfig } from "./config";
+import { blockOutbound } from "./breaker";
+import { configPath, describeMappings, loadConfig } from "./config";
 import { maskJson, maskToolResult, restoreInPlace, type Mapping } from "./mask";
 
 interface PiLike {
@@ -25,14 +26,21 @@ interface PiLike {
 }
 
 export default function secretsObfuscator(pi: PiLike): void {
-	const { config, warnings } = loadConfig();
-	for (const warning of warnings) console.error(`[secrets-obfuscator] ${warning}`);
+	const { config, errors, warnings } = loadConfig();
+	for (const warning of warnings) console.error(`[secrets-obfuscator] warning: ${warning}`);
 
-	const mappings: Mapping[] = config.mappings;
-	if (mappings.length === 0) {
-		console.error("[secrets-obfuscator] no mappings configured; nothing to mask");
+	// Circuit breaker. A guard that cannot read its own config is not a guard.
+	// Stop omp here rather than start a session the model could leak into.
+	if (errors.length > 0) {
+		console.error("[secrets-obfuscator] FATAL: the guard is not armed, omp must not reach a model");
+		for (const error of errors) console.error(`[secrets-obfuscator]   ${error}`);
+		console.error(`[secrets-obfuscator] fix ${configPath()} and start again`);
+		blockOutbound(errors[0] ?? "config unusable");
+		console.error("[secrets-obfuscator] breaker closed: outbound model requests will fail");
 		return;
 	}
+
+	const mappings: Mapping[] = config.mappings;
 
 	// Outbound, pass 1: the transcript Pi is about to serialize.
 	pi.on("context", (event) => {

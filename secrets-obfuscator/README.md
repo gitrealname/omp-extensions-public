@@ -26,7 +26,40 @@ Four hooks do all the work.
 The session file therefore only ever holds aliases. Nothing rewrites old
 sessions, and no state file exists.
 
-### Aliases are derived, not stored
+## Circuit breaker
+
+A guard that cannot read its own config is not a guard. omp swallows extension
+failures — `process.exit(1)` is reported and the module unloaded, a hook that
+throws is logged and the request goes out anyway — so the breaker sits at the
+one place omp cannot retry around: the outbound request.
+
+When the config is not usable, every non-loopback `fetch` fails with the reason.
+No request leaves, so nothing reaches a model unmasked.
+
+```text
+[secrets-obfuscator] FATAL: the guard is not armed, omp must not reach a model
+[secrets-obfuscator]   config unreadable (Flow sequence ...): C:\Users\me\.omp\agent\secrets-obfuscator.yaml
+[secrets-obfuscator] fix C:\Users\me\.omp\agent\secrets-obfuscator.yaml and start again
+secrets-obfuscator: guard not armed, request blocked (...): https://openrouter.ai/api/v1/responses
+```
+
+Fatal, breaker closes:
+
+1. config file missing or unreadable
+2. YAML that does not parse
+3. root is not a map, or `mappings` is not a map
+4. `mappings` missing, or empty after validation
+5. label outside `[A-Z0-9_]`
+6. a label with an empty value, or a value that is not a string
+7. one value listed under two labels
+8. two values sharing one alias
+
+Never fatal, omp runs armed:
+
+1. a value shorter than 4 characters — warning only
+2. the same value twice under one label — warning, second copy ignored
+
+## Aliases are derived, not stored
 
 ```text
 <SECRET:GITHUB_TOKEN:1A2B3C4D>

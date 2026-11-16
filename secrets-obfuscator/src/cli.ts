@@ -43,10 +43,11 @@ if (explicitConfig !== undefined && explicitConfig.length > 0) {
 	process.env.SECRETS_OBFUSCATOR_CONFIG = explicitConfig;
 }
 
-const { config, warnings } = loadConfig();
-for (const warning of warnings) console.error(`[secrets-obfuscator] ${warning}`);
-if (config.mappings.length === 0) {
-	console.error(`[secrets-obfuscator] no mappings in ${configPath()}; nothing to sweep`);
+const { config, errors, warnings } = loadConfig();
+for (const error of errors) console.error(`[secrets-obfuscator] error: ${error}`);
+for (const warning of warnings) console.error(`[secrets-obfuscator] warning: ${warning}`);
+if (errors.length > 0 || config.mappings.length === 0) {
+	console.error(`[secrets-obfuscator] no usable mappings in ${configPath()}; nothing to sweep`);
 	process.exit(1);
 }
 

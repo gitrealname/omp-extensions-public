@@ -34,32 +34,44 @@ export function configPath(): string {
 /** Labels must be safe to emit into JSON strings and prose alike. */
 const labelRe = /^[A-Z0-9_]{1,64}$/;
 
-export function loadConfig(): { config: Config; warnings: string[] } {
+/**
+ * Read the mapping file.
+ *
+ * Errors are fatal: the guard cannot be trusted with a partial config, so the
+ * caller must stop omp instead of running unmasked. Warnings never stop omp.
+ */
+export function loadConfig(): { config: Config; errors: string[]; warnings: string[] } {
 	const file = configPath();
+	const errors: string[] = [];
 	const warnings: string[] = [];
 	let raw: unknown;
 	try {
 		raw = parseYaml(fs.readFileSync(file, "utf8"));
 	} catch (err) {
 		const code = (err as NodeJS.ErrnoException).code;
-		warnings.push(code === "ENOENT" ? `config not found: ${file}` : `config unreadable (${(err as Error).message}): ${file}`);
-		return { config: { mappings: [] }, warnings };
+		errors.push(code === "ENOENT" ? `config not found: ${file}` : `config unreadable (${(err as Error).message}): ${file}`);
+		return { config: { mappings: [] }, errors, warnings };
 	}
 
-	const root = (raw ?? {}) as Record<string, unknown>;
+	const root = raw;
+	if (root === null || typeof root !== "object" || Array.isArray(root)) {
+		errors.push(`config root must be a map with a "mappings" key: ${file}`);
+		return { config: { mappings: [] }, errors, warnings };
+	}
+
 	const mappings: Mapping[] = [];
 	const byAlias = new Map<string, string>();
 	const labelByValue = new Map<string, string>();
-	const section = root.mappings;
+	const section = (root as Record<string, unknown>).mappings;
 
 	if (section === undefined || section === null) {
-		warnings.push(`no "mappings" section in ${file}`);
+		errors.push(`no "mappings" section in ${file}`);
 	} else if (typeof section !== "object" || Array.isArray(section)) {
-		warnings.push(`"mappings" must be a map: label -> value or list of values`);
+		errors.push(`"mappings" must be a map: label -> value or list of values`);
 	} else {
 		for (const [label, rawValue] of Object.entries(section as Record<string, unknown>)) {
 			if (!labelRe.test(label)) {
-				warnings.push(`mapping skipped: label must match ${labelRe.source}: ${label}`);
+				errors.push(`invalid label "${label}": must match ${labelRe.source}`);
 				continue;
 			}
 
@@ -71,29 +83,30 @@ export function loadConfig(): { config: Config; warnings: string[] } {
 				for (const v of rawValue) if (typeof v === "string") values.push(v);
 			}
 			if (values.length === 0) {
-				warnings.push(`mapping skipped (needs a value or a list of values): ${label}`);
+				errors.push(`"${label}" has no value: expected a string or a list of strings`);
 				continue;
 			}
 
 			for (const value of values) {
 				if (!value) {
-					warnings.push(`mapping skipped (empty value): ${label}`);
+					errors.push(`"${label}" has an empty value`);
 					continue;
 				}
 				const other = labelByValue.get(value);
 				if (other !== undefined) {
-					// Same label twice is a duplicate; a second label would make
-					// two aliases for one value, and masking could only use one.
-					if (other !== label) warnings.push(`mapping skipped: value already listed under ${other}; first label wins`);
+					// One value cannot be two secrets. A duplicate inside the same
+					// list is harmless; a second label is a config error.
+					if (other === label) warnings.push(`"${label}" lists the same value twice; ignored`);
+					else errors.push(`value under "${label}" is already listed under "${other}"; one value cannot carry two labels`);
 					continue;
 				}
 				const alias = aliasFor(value, label);
 				if (byAlias.has(alias)) {
-					warnings.push(`mapping ${alias}: alias collision; value skipped`);
+					errors.push(`alias collision ${alias}: two values share one alias`);
 					continue;
 				}
 				if (value.trim().length < 4) {
-					warnings.push(`mapping ${alias}: value is only ${value.length} chars; it will also mask ordinary text`);
+					warnings.push(`${alias}: value is only ${value.length} chars; it will also mask ordinary text`);
 				}
 				labelByValue.set(value, label);
 				byAlias.set(alias, value);
@@ -102,7 +115,9 @@ export function loadConfig(): { config: Config; warnings: string[] } {
 		}
 	}
 
-	return { config: { mappings }, warnings };
+	if (errors.length === 0 && mappings.length === 0) errors.push(`no usable mappings in ${file}`);
+
+	return { config: { mappings }, errors, warnings };
 }
 
 /** Redacted rendering for logs: never echo a real value. */
