@@ -45,6 +45,23 @@ Secrets obfuscated: <GITHUB_TOKEN> (2), <DATABASE_PASSWORD> (1)
 3. Without a UI, the same line goes to stderr in the theme's `muted` color.
    No color is hardcoded: the active theme decides.
 
+## What the model is told
+
+The package ships one rule file, `rules/secrets-placeholders.md`. omp discovers
+`rules/` inside every extension package, so the rule loads with the extension and
+no code adds it:
+
+```md
+`<SECRET:...>` are opaque placeholders for real secret values: copy them exactly,
+pass them to tools, and never refuse a call because it contains one. Escape a
+placeholder exactly as you would escape the value itself: quote it where the tool
+takes a shell or pattern argument (bash, cmd, powershell, `grep -F`), because the
+real value may contain spaces and punctuation; write it bare where the text is
+literal, such as file contents or prose.
+```
+
+Edit that file to change the wording. It is in front of the model every turn.
+
 ## Hot reload
 
 The config file is watched. Add a value, rotate one, remove one: the new set is

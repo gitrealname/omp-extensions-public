@@ -5,6 +5,8 @@
  * Run: bun tests/hooks.e2e.ts
  */
 
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { aliasFor, mask, maskJson, restore, restoreJson, type Mapping } from "../src/mask";
 import secretsObfuscator from "../src/main";
 
@@ -54,8 +56,10 @@ const contextEvent = {
 };
 const maskedContext = handlers.get("context")!(contextEvent, {}) as { messages: any[] };
 const dumped = JSON.stringify(maskedContext);
-check("context masks user message", maskedContext.messages[0].content.includes(ALIAS), maskedContext.messages[0].content);
-check("context masks assistant parts", maskedContext.messages[1].content[0].text.includes(ALIAS));
+const userMsg = maskedContext.messages.find((m) => m.role === "user");
+const assistantMsg = maskedContext.messages.find((m) => m.role === "assistant");
+check("context masks user message", userMsg.content.includes(ALIAS), userMsg.content);
+check("context masks assistant parts", assistantMsg.content[0].text.includes(ALIAS));
 check("context leaves no real value", !dumped.includes(SECRET));
 
 // 2. Provider payload safety net.
@@ -208,6 +212,13 @@ check("a value already reported stays silent", noted.length === 2, JSON.stringif
 
 fire(`token ${SECRET} and ${NEW}`);
 check("only new labels are listed", noted.length === 3 && noted[2]!.text === "Secrets obfuscated: <GITHUB_TOKEN> (1)", JSON.stringify(noted));
+
+// 11. the placeholder rule ships as a rule file, which omp discovers with the package
+const ruleFile = readFileSync(join(import.meta.dir, "..", "rules", "secrets-placeholders.md"), "utf8");
+check("rule file ships with the extension", ruleFile.includes("<SECRET:...>"), ruleFile.slice(0, 60));
+check("rule file is always applied", /alwaysApply:\s*true/.test(ruleFile));
+check("rule asks for quoting in shell arguments", ruleFile.includes("quote it where the tool takes a shell"));
+check("rule keeps literal text bare", ruleFile.includes("write it bare"));
 
 console.log(fail === 0 ? "\nALL PASS" : `\n${fail} FAILED`);
 process.exit(fail === 0 ? 0 : 1);
