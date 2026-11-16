@@ -1,0 +1,11 @@
+{
+  "name": "@local/omp-secrets-obfuscator",
+  "version": "0.1.0",
+  "private": true,
+  "omp": {
+    "extensions": ["./src/main.ts"]
+  },
+  "dependencies": {
+    "yaml": "^2.9.1"
+  }
+}

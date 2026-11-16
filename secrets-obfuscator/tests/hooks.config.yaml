@@ -1,0 +1,5 @@
+mappings:
+  GITHUB_TOKEN: ghp_realtokenvalue123456789
+  DATABASE_PASSWORD:
+    - old_password_value_123
+    - new_password_value_456
