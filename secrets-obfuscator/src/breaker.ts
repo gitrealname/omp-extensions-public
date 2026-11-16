@@ -23,22 +23,25 @@ function requestUrl(input: unknown): string {
 	return typeof url === "string" ? url : String(input);
 }
 
+let reason = "config unusable";
+
 /**
  * Point every outbound fetch at a rejection. Idempotent: a second call keeps
- * the first rejection message.
+ * the patch and refreshes the reason, so a later config failure is reported
+ * with its own message.
  */
-export function blockOutbound(reason: string): void {
+export function blockOutbound(why: string): void {
+	reason = why;
 	const scope = globalThis as unknown as Record<symbol, unknown>;
 	if (scope[GUARD_FLAG]) return;
 	scope[GUARD_FLAG] = true;
 
 	const original = globalThis.fetch;
-	const message = `secrets-obfuscator: guard not armed, request blocked (${reason})`;
 
 	globalThis.fetch = ((input: unknown, init?: unknown) => {
 		const url = requestUrl(input);
 		if (/^https?:\/\//i.test(url) && !isLoopback(url)) {
-			return Promise.reject(new Error(`${message}: ${url}`));
+			return Promise.reject(new Error(`secrets-obfuscator: guard not armed, request blocked (${reason}): ${url}`));
 		}
 		return original(input as RequestInfo, init as RequestInit);
 	}) as typeof globalThis.fetch;

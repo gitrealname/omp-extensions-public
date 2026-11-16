@@ -13,12 +13,15 @@
  * the value and carry a short tag of it, so nothing has to be rewritten later,
  * no state file is needed, and decoding is unambiguous.
  *
+ * The config file is watched. Add or rotate a value and the new set is armed
+ * on the next hook; no restart.
+ *
  * One label can carry several values. A rotated password keeps its label, so
  * old sessions and new sessions mask to the same label with a different tag.
  */
 
 import { blockOutbound } from "./breaker";
-import { configPath, describeMappings, loadConfig } from "./config";
+import { configPath, describeMappings, loadConfig, watchConfig } from "./config";
 import { maskJson, maskToolResult, restoreInPlace, type Mapping } from "./mask";
 
 interface PiLike {
@@ -40,7 +43,39 @@ export default function secretsObfuscator(pi: PiLike): void {
 		return;
 	}
 
-	const mappings: Mapping[] = config.mappings;
+	let mappings: Mapping[] = config.mappings;
+
+	// Last context any hook has seen, so a file watcher outside a hook can
+	// still reach the UI.
+	let uiCtx: any;
+
+	const announce = (text: string, ctx?: any): void => {
+		const source = ctx ?? uiCtx;
+		const notify = source?.ui?.notify;
+		if (notify) notify.call(source.ui, text, "info");
+		if (process.stdout.isTTY) return;
+		const fg = source?.ui?.theme?.fg;
+		console.error(fg ? fg.call(source.ui.theme, "muted", text) : text);
+	};
+
+	// Hot reload. The handlers read `mappings` on every call, so a new set is
+	// in force from the next hook on. A broken file is not "keep the old
+	// values and hope": it closes the breaker, like a bad start.
+	const reload = (): void => {
+		const next = loadConfig();
+		for (const warning of next.warnings) console.error(`[secrets-obfuscator] warning: ${warning}`);
+		if (next.errors.length > 0) {
+			console.error("[secrets-obfuscator] FATAL: config reload failed; the last good config stays armed");
+			for (const error of next.errors) console.error(`[secrets-obfuscator]   ${error}`);
+			uiCtx?.ui?.notify?.call(uiCtx.ui, `Config reload failed: ${next.errors[0]}`, "warning");
+			blockOutbound(next.errors[0] ?? "config reload failed");
+			console.error("[secrets-obfuscator] breaker closed: outbound model requests will fail");
+			return;
+		}
+		mappings = next.config.mappings;
+		announce(`Config reloaded: ${describeMappings(mappings)}`);
+	};
+	watchConfig(reload);
 
 	// What the model never saw, and what the user has already been told about.
 	const reported = new Set<string>();
@@ -52,7 +87,8 @@ export default function secretsObfuscator(pi: PiLike): void {
 	};
 
 	// Outbound, pass 1: the transcript Pi is about to serialize.
-	pi.on("context", (event) => {
+	pi.on("context", (event, ctx) => {
+		if (ctx) uiCtx = ctx;
 		const messages = (event as { messages?: unknown }).messages;
 		if (messages === undefined) return undefined;
 		return { messages: maskJson(messages, mappings, note) };
@@ -87,6 +123,7 @@ export default function secretsObfuscator(pi: PiLike): void {
 	// A shy note for the user, never for the model: which secrets this turn
 	// replaced. Only new ones, so a long session does not repeat itself.
 	pi.on("agent_end", (_event, ctx) => {
+		if (ctx) uiCtx = ctx;
 		if (caught.size === 0) return;
 		const fresh: string[] = [];
 		for (const [alias, hit] of caught) {
@@ -96,13 +133,7 @@ export default function secretsObfuscator(pi: PiLike): void {
 		}
 		caught.clear();
 		if (fresh.length === 0) return;
-		const text = `Secrets obfuscated: ${fresh.join(", ")}`;
-		// The UI line is the report. When there is no UI to show it (piped or
-		// redirected runs), the same text goes to stderr in the theme's muted
-		// color. No color is hardcoded here; the theme owns it.
-		const theme = (ctx as { ui?: { theme?: { fg?: (name: string, value: string) => string } } })?.ui?.theme;
-		if (ctx?.ui?.notify) ctx.ui.notify(text, "info");
-		if (!process.stdout.isTTY) console.error(theme?.fg ? theme.fg("muted", text) : text);
+		announce(`Secrets obfuscated: ${fresh.join(", ")}`, ctx);
 	});
 
 	console.error(`[secrets-obfuscator] masking ${describeMappings(mappings)}`);

@@ -45,6 +45,20 @@ Secrets obfuscated: <GITHUB_TOKEN> (2), <DATABASE_PASSWORD> (1)
 3. Without a UI, the same line goes to stderr in the theme's `muted` color.
    No color is hardcoded: the active theme decides.
 
+## Hot reload
+
+The config file is watched. Add a value, rotate one, remove one: the new set is
+armed from the next hook. No restart.
+
+1. Save the file. Editors that write a temp file and rename over it work.
+2. A short message names the new set: `Config reloaded: GITHUB_TOKEN, DATABASE_PASSWORD x2`.
+3. A broken file does not quietly keep the old values. The breaker closes and
+   outbound requests fail until the file parses again.
+
+The directory is watched, not the file, so an editor that replaces the file
+cannot leave the guard blind. When no directory watch is available, a 2 s poll
+takes over.
+
 ## Circuit breaker
 
 A guard that cannot read its own config is not a guard. omp swallows extension

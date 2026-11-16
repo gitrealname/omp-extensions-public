@@ -35,6 +35,59 @@ export function configPath(): string {
 const labelRe = /^[A-Z0-9_]{1,64}$/;
 
 /**
+ * Call onChange after the config file changes.
+ *
+ * Watches the directory, not the file. Editors save by writing a temp file and
+ * renaming over the target, which leaves a watch on the old inode blind; the
+ * directory still reports the name. Events are debounced so one save is one
+ * reload.
+ *
+ * Falls back to fs.watchFile (poll) when no directory watch is available.
+ * Returns a stop function.
+ */
+export function watchConfig(onChange: () => void, debounceMs = 200): () => void {
+	const file = configPath();
+	const dir = path.dirname(file);
+	const base = path.basename(file);
+
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	const fire = (): void => {
+		if (timer) clearTimeout(timer);
+		timer = setTimeout(() => {
+			timer = undefined;
+			onChange();
+		}, debounceMs);
+		timer.unref?.();
+	};
+
+	let watcher: fs.FSWatcher | undefined;
+	try {
+		watcher = fs.watch(dir, (_event, name) => {
+			if (name && name.toString() !== base) return;
+			fire();
+		});
+		// Never hold the process open: a short-lived run must be able to exit.
+		(watcher as unknown as { unref?: () => void }).unref?.();
+	} catch {
+		watcher = undefined; // no directory watch: fall through to polling
+	}
+
+	if (!watcher) {
+		const poll = fs.watchFile(file, { interval: 2000 }, () => fire());
+		(poll as unknown as { unref?: () => void }).unref?.();
+		return () => {
+			if (timer) clearTimeout(timer);
+			fs.unwatchFile(file);
+		};
+	}
+
+	return () => {
+		if (timer) clearTimeout(timer);
+		watcher?.close();
+	};
+}
+
+/**
  * Read the mapping file.
  *
  * Errors are fatal: the guard cannot be trusted with a partial config, so the
