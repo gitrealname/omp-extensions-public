@@ -26,6 +26,25 @@ Four hooks do all the work.
 The session file therefore only ever holds aliases. Nothing rewrites old
 sessions, and no state file exists.
 
+## What the user sees
+
+At load, one line names the labels in force:
+
+```text
+[secrets-obfuscator] masking GITHUB_TOKEN, DATABASE_PASSWORD x2
+```
+
+During a turn, a shy line names what was replaced and how often:
+
+```text
+Secrets obfuscated: <GITHUB_TOKEN> (2), <DATABASE_PASSWORD> (1)
+```
+
+1. Only new values are reported. A value already reported stays silent.
+2. The line goes to the user, never to the model.
+3. Without a UI, the same line goes to stderr in the theme's `muted` color.
+   No color is hardcoded: the active theme decides.
+
 ## Circuit breaker
 
 A guard that cannot read its own config is not a guard. omp swallows extension

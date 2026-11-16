@@ -42,11 +42,20 @@ export default function secretsObfuscator(pi: PiLike): void {
 
 	const mappings: Mapping[] = config.mappings;
 
+	// What the model never saw, and what the user has already been told about.
+	const reported = new Set<string>();
+	const caught = new Map<string, { label: string; count: number }>();
+	const note = (mapping: Mapping): void => {
+		const seen = caught.get(mapping.alias);
+		if (seen) seen.count += 1;
+		else caught.set(mapping.alias, { label: mapping.label ?? mapping.alias, count: 1 });
+	};
+
 	// Outbound, pass 1: the transcript Pi is about to serialize.
 	pi.on("context", (event) => {
 		const messages = (event as { messages?: unknown }).messages;
 		if (messages === undefined) return undefined;
-		return { messages: maskJson(messages, mappings) };
+		return { messages: maskJson(messages, mappings, note) };
 	});
 
 	// Outbound, pass 2: provider-specific fields Pi adds after `context`
@@ -54,7 +63,7 @@ export default function secretsObfuscator(pi: PiLike): void {
 	pi.on("before_provider_request", (event) => {
 		const payload = (event as { payload?: unknown }).payload;
 		if (payload === undefined) return undefined;
-		return maskJson(payload, mappings);
+		return maskJson(payload, mappings, note);
 	});
 
 	// Inbound, tool arguments: the model writes an alias, the tool runs the
@@ -69,10 +78,31 @@ export default function secretsObfuscator(pi: PiLike): void {
 	// Inbound, tool output: `printenv`, `cat .env`, `git remote -v` stay useful
 	// to the agent but reach the model masked.
 	pi.on("tool_result", (event) => {
-		const patched = maskToolResult(event, mappings);
+		const patched = maskToolResult(event, mappings, note);
 		const content = (patched as { content?: unknown }).content;
 		if (content === undefined || content === (event as { content?: unknown }).content) return undefined;
 		return { content };
+	});
+
+	// A shy note for the user, never for the model: which secrets this turn
+	// replaced. Only new ones, so a long session does not repeat itself.
+	pi.on("agent_end", (_event, ctx) => {
+		if (caught.size === 0) return;
+		const fresh: string[] = [];
+		for (const [alias, hit] of caught) {
+			if (reported.has(alias)) continue;
+			reported.add(alias);
+			fresh.push(`<${hit.label}> (${hit.count})`);
+		}
+		caught.clear();
+		if (fresh.length === 0) return;
+		const text = `Secrets obfuscated: ${fresh.join(", ")}`;
+		// The UI line is the report. When there is no UI to show it (piped or
+		// redirected runs), the same text goes to stderr in the theme's muted
+		// color. No color is hardcoded here; the theme owns it.
+		const theme = (ctx as { ui?: { theme?: { fg?: (name: string, value: string) => string } } })?.ui?.theme;
+		if (ctx?.ui?.notify) ctx.ui.notify(text, "info");
+		if (!process.stdout.isTTY) console.error(theme?.fg ? theme.fg("muted", text) : text);
 	});
 
 	console.error(`[secrets-obfuscator] masking ${describeMappings(mappings)}`);

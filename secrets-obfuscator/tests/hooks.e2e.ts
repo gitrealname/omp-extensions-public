@@ -179,5 +179,35 @@ const padMasked = mask(`x${PAD}y`, padMap);
 check("leading and trailing spaces kept out of the text", padMasked === `x${padAlias}y`, padMasked);
 check("padded value restores byte for byte", restore(padMasked, padMap) === `x${PAD}y`);
 
+// 10. The user is told what was replaced, once per value, never the model.
+const noted: Array<{ text: string; level: string }> = [];
+const fresh = new Map<string, Handler>();
+secretsObfuscator({
+	on: (event: string, handler: Handler) => {
+		fresh.set(event, handler);
+		return () => fresh.delete(event);
+	},
+} as any);
+const ctx = { ui: { notify: (text: string, level: string) => noted.push({ text, level }) } };
+const fire = (text: string): void => {
+	fresh.get("context")!({ messages: [{ role: "user", content: text }] }, ctx);
+	fresh.get("agent_end")!({}, ctx);
+};
+
+check("agent_end handler registered", fresh.has("agent_end"));
+
+fire(`use ${OLD}`);
+check("first catch is reported once", noted.length === 1 && noted[0]!.text === "Secrets obfuscated: <DATABASE_PASSWORD> (1)", JSON.stringify(noted));
+check("report is not an error", noted[0]?.level === "info", String(noted[0]?.level));
+
+fire(`use ${NEW}`);
+check("a new value under the same label is reported", noted.length === 2 && noted[1]!.text === "Secrets obfuscated: <DATABASE_PASSWORD> (1)", JSON.stringify(noted));
+
+fire(`use ${OLD} again`);
+check("a value already reported stays silent", noted.length === 2, JSON.stringify(noted));
+
+fire(`token ${SECRET} and ${NEW}`);
+check("only new labels are listed", noted.length === 3 && noted[2]!.text === "Secrets obfuscated: <GITHUB_TOKEN> (1)", JSON.stringify(noted));
+
 console.log(fail === 0 ? "\nALL PASS" : `\n${fail} FAILED`);
 process.exit(fail === 0 ? 0 : 1);

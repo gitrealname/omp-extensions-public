@@ -110,7 +110,7 @@ export function loadConfig(): { config: Config; errors: string[]; warnings: stri
 				}
 				labelByValue.set(value, label);
 				byAlias.set(alias, value);
-				mappings.push({ alias, value });
+				mappings.push({ alias, value, label });
 			}
 		}
 	}
@@ -123,7 +123,12 @@ export function loadConfig(): { config: Config; errors: string[]; warnings: stri
 /** Redacted rendering for logs: never echo a real value. */
 export function describeMappings(mappings: readonly Mapping[]): string {
 	if (mappings.length === 0) return "(none)";
-	const shown = mappings.slice(0, 8).map((m) => `${m.alias} <- ${m.value.length} chars`);
-	const rest = mappings.length - shown.length;
+	const counts = new Map<string, number>();
+	for (const m of mappings) {
+		const label = m.label ?? m.alias;
+		counts.set(label, (counts.get(label) ?? 0) + 1);
+	}
+	const shown = [...counts].slice(0, 8).map(([label, n]) => (n > 1 ? `${label} x${n}` : label));
+	const rest = counts.size - shown.length;
 	return shown.join(", ") + (rest > 0 ? `, +${rest} more` : "");
 }
