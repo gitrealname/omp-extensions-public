@@ -60,6 +60,23 @@ A rotated secret keeps its label and gains a value. Old sessions stay masked
 with the old tag, new sessions use the new one, and each alias restores the
 value it names.
 
+A value does not have to be a whole secret. Configure a fragment and every
+occurrence around it is masked:
+
+```yaml
+mappings:
+  EMAIL_DOMAIN: "@example.com"
+  API_HOST: api.example.com
+```
+
+```text
+alice@example.com            alice<SECRET:EMAIL_DOMAIN:...>
+https://api.example.com/v1   https://<SECRET:API_HOST:...>/v1
+```
+
+The text around the fragment stays readable. When two values overlap, the
+longer one at that position wins.
+
 The file holds real values. Keep it out of git.
 
 ## Install
@@ -108,10 +125,11 @@ model and no network.
 
 ## Limits
 
-1. Matching is exact and literal. Encoded, split or hashed values are not found.
+1. Matching is exact and literal, including the JSON-escaped spelling of a value.
+   Base64, URL-encoded or split values are not found.
 2. The model still sees the alias, so it can mention or repeat it.
 3. Aliases can collide with real text if a value is very short.
 4. A secret that never appears in the transcript is never masked, because there is
    nothing to mask.
-5. Short or common values can mask ordinary text. Use values of 8 characters or
-   more.
+5. Short or common values can mask ordinary text. A value under 4 characters logs
+   a warning at load.

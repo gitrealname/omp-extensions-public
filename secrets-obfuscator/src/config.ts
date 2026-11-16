@@ -92,6 +92,9 @@ export function loadConfig(): { config: Config; warnings: string[] } {
 					warnings.push(`mapping ${alias}: alias collision; value skipped`);
 					continue;
 				}
+				if (value.trim().length < 4) {
+					warnings.push(`mapping ${alias}: value is only ${value.length} chars; it will also mask ordinary text`);
+				}
 				labelByValue.set(value, label);
 				byAlias.set(alias, value);
 				mappings.push({ alias, value });

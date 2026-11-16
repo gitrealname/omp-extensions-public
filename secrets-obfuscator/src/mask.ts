@@ -36,33 +36,44 @@ export function maxAliasLength(mappings: readonly Mapping[]): number {
 /**
  * Replace every occurrence of every real value with its alias.
  * Leftmost-longest wins when values overlap.
+ *
+ * A value can reach the transcript in two spellings: as itself, or with JSON
+ * escaping when it sits inside serialised JSON that was never parsed
+ * (`pa"ss` arrives as `pa\"ss`). Both spellings map to the same alias.
  */
 export function mask(text: string, mappings: readonly Mapping[]): string {
 	if (mappings.length === 0 || text.length === 0) return text;
 
 	// Bucket by first byte so each candidate start position does one lookup.
-	const buckets = new Map<string, Mapping[]>();
+	const buckets = new Map<string, Array<{ text: string; alias: string }>>();
 	for (const m of mappings) {
 		if (m.value.length === 0) continue;
-		const key = m.value[0]!;
-		const list = buckets.get(key);
-		if (list) list.push(m);
-		else buckets.set(key, [m]);
+		const spellings = new Set([m.value]);
+		const escaped = JSON.stringify(m.value).slice(1, -1);
+		if (escaped !== m.value) spellings.add(escaped);
+		for (const spelling of spellings) {
+			if (spelling.length === 0) continue;
+			const key = spelling[0]!;
+			const list = buckets.get(key);
+			const entry = { text: spelling, alias: m.alias };
+			if (list) list.push(entry);
+			else buckets.set(key, [entry]);
+		}
 	}
 
 	let out = "";
 	let i = 0;
 	while (i < text.length) {
 		const candidates = buckets.get(text[i]!);
-		let hit: Mapping | undefined;
+		let hit: { text: string; alias: string } | undefined;
 		if (candidates) {
-			for (const m of candidates) {
-				if (text.startsWith(m.value, i) && (!hit || m.value.length > hit.value.length)) hit = m;
+			for (const candidate of candidates) {
+				if (text.startsWith(candidate.text, i) && (!hit || candidate.text.length > hit.text.length)) hit = candidate;
 			}
 		}
 		if (hit) {
 			out += hit.alias;
-			i += hit.value.length;
+			i += hit.text.length;
 			continue;
 		}
 		out += text[i];

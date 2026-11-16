@@ -5,11 +5,20 @@
  * Run: bun tests/hooks.e2e.ts
  */
 
-import { aliasFor } from "../src/mask";
+import { aliasFor, mask, maskJson, restore, restoreJson, type Mapping } from "../src/mask";
 import secretsObfuscator from "../src/main";
 
 const SECRET = "ghp_realtokenvalue123456789";
 const ALIAS = aliasFor(SECRET, "GITHUB_TOKEN");
+const OLD = "old_password_value_123";
+const NEW = "new_password_value_456";
+const OLD_ALIAS = aliasFor(OLD, "DATABASE_PASSWORD");
+const NEW_ALIAS = aliasFor(NEW, "DATABASE_PASSWORD");
+const mappings: Mapping[] = [
+	{ alias: ALIAS, value: SECRET },
+	{ alias: OLD_ALIAS, value: OLD },
+	{ alias: NEW_ALIAS, value: NEW },
+];
 
 // Isolated config for this run.
 process.env.SECRETS_OBFUSCATOR_CONFIG = "D:/.ai/OMP/src/omp-extensions-public/secrets-obfuscator/tests/hooks.config.yaml";
@@ -69,10 +78,6 @@ const twice = handlers.get("context")!(maskedContext, {}) as { messages: any[] }
 check("masking is idempotent", JSON.stringify(twice) === JSON.stringify(maskedContext));
 
 // 6. One label, several values: each value carries its own tag.
-const OLD = "old_password_value_123";
-const NEW = "new_password_value_456";
-const OLD_ALIAS = aliasFor(OLD, "DATABASE_PASSWORD");
-const NEW_ALIAS = aliasFor(NEW, "DATABASE_PASSWORD");
 check("rotated values get different aliases", OLD_ALIAS !== NEW_ALIAS, `${OLD_ALIAS} vs ${NEW_ALIAS}`);
 check("both aliases carry the label", OLD_ALIAS.startsWith("<SECRET:DATABASE_PASSWORD:") && NEW_ALIAS.startsWith("<SECRET:DATABASE_PASSWORD:"));
 const ctxOld = handlers.get("context")!({ messages: [{ role: "user", content: `password ${OLD}` }] }, {}) as { messages: any[] };
@@ -85,6 +90,94 @@ check("old alias restores the old value", callOld.input.command.includes(OLD), c
 const callNew = { toolName: "bash", input: { command: `echo ${NEW_ALIAS}` } };
 handlers.get("tool_call")!(callNew, {});
 check("new alias restores the new value", callNew.input.command.includes(NEW), callNew.input.command);
+
+// 7. Secrets are rarely space delimited. Quotes, '=', ':', cookies, JSON.
+const SURROUNDINGS: Array<[string, string]> = [
+	["double quotes", `"${SECRET}"`],
+	["single quotes", `'${SECRET}'`],
+	["assignment", `TOKEN=${SECRET}`],
+	["curl header", `-H "Authorization: Bearer ${SECRET}"`],
+	["url userinfo", `https://user:${SECRET}@example.com/db`],
+	["cookie", `session=${SECRET}; Path=/; HttpOnly`],
+	["yaml line", `password: ${SECRET}`],
+	["brackets", `<<${SECRET}>>`],
+	["no delimiter", `x${SECRET}y`],
+	["multiline", `line1\n  token="${SECRET}"\nline3`],
+];
+for (const [name, text] of SURROUNDINGS) {
+	const masked = mask(text, mappings);
+	check(`mask keeps surroundings (${name})`, masked.includes(ALIAS) && !masked.includes(SECRET) && masked.length > ALIAS.length, masked);
+	check(`restore round trip (${name})`, restore(masked, mappings) === text);
+}
+
+// JSON strings arrive quoted and escaped; masking runs on the decoded value.
+for (const [name, value] of [
+	["json string", { password: SECRET }],
+	["json nested", { a: [{ b: SECRET }] }],
+	["json array", [SECRET, `x${SECRET}y`]],
+] as Array<[string, unknown]>) {
+	const masked = maskJson(value, mappings) as any;
+	const dumped = JSON.stringify(masked);
+	check(`maskJson keeps shape (${name})`, !dumped.includes(SECRET) && dumped.includes(ALIAS), dumped);
+	check(`restoreJson round trip (${name})`, JSON.stringify(restoreJson(masked, mappings)) === JSON.stringify(value));
+}
+
+// Characters that would break a regex-based matcher must be literal here.
+const META = 'p@ss."w0rd\\x[1]{2}';
+const metaAlias = aliasFor(META, "META_SECRET");
+const metaMappings = [...mappings, { alias: metaAlias, value: META }];
+const metaText = `url="https://u:${META}@h/p?a=1&b=2" note='${META}'`;
+const metaMasked = mask(metaText, metaMappings);
+check("regex metacharacters masked literally", !metaMasked.includes(META) && metaMasked.includes(metaAlias), metaMasked);
+check("regex metacharacters restore exactly", restore(metaMasked, metaMappings) === metaText);
+
+// A value inside serialised JSON that was never parsed arrives escaped.
+const QUOTE = 'pa"ss\\w0rd';
+const quoteAlias = aliasFor(QUOTE, "QUOTED_SECRET");
+const quotedMap: Mapping[] = [...mappings, { alias: quoteAlias, value: QUOTE }];
+const escapedForm = JSON.stringify(QUOTE).slice(1, -1);
+const both = `raw=${QUOTE} escaped={"p":"${escapedForm}"}`;
+const bothMasked = mask(both, quotedMap);
+check("escaped spelling masked too", !bothMasked.includes(escapedForm) && !bothMasked.includes(QUOTE), bothMasked);
+check("both spellings share one alias", bothMasked.split(quoteAlias).length - 1 === 2, bothMasked);
+
+// 8. Partial values: a fragment protects every occurrence around it.
+const DOMAIN_ALIAS = aliasFor("@example.com", "EMAIL_DOMAIN");
+const partial: Mapping[] = [...mappings, { alias: DOMAIN_ALIAS, value: "@example.com" }];
+const mail = "mail alice@example.com or bob@example.com, skip carol@other.org";
+const mailMasked = mask(mail, partial);
+check("domain fragment masked in addresses", !mailMasked.includes("@example.com") && mailMasked.includes(`alice${DOMAIN_ALIAS}`), mailMasked);
+check("other domain untouched", mailMasked.includes("carol@other.org"), mailMasked);
+check("domain fragment restores", restore(mailMasked, partial) === mail);
+
+const HOST_ALIAS = aliasFor("api.example.com", "API_HOST");
+const hostMap: Mapping[] = [...mappings, { alias: HOST_ALIAS, value: "api.example.com" }];
+const url = "curl https://api.example.com/v1/items?a=1";
+const urlMasked = mask(url, hostMap);
+check("host fragment masked in url", urlMasked.includes(`https://${HOST_ALIAS}/v1`) && !urlMasked.includes("api.example.com"), urlMasked);
+check("host fragment restores", restore(urlMasked, hostMap) === url);
+
+// A longer value wins over a shorter one that starts at the same offset.
+const overlap: Mapping[] = [...hostMap, { alias: DOMAIN_ALIAS, value: "example.com" }];
+const both2 = mask("https://api.example.com/x", overlap);
+check("longest value wins on overlap", both2.includes(`https://${HOST_ALIAS}/x`), both2);
+
+// 9. Values that contain spaces: passphrases, sentences, padded values.
+const PASS = "correct horse battery staple";
+const passAlias = aliasFor(PASS, "PASSPHRASE");
+const passMap: Mapping[] = [...mappings, { alias: passAlias, value: PASS }];
+const passText = `ssh-keygen -N '${PASS}' -f ./key && echo done`;
+const passMasked = mask(passText, passMap);
+check("passphrase with spaces masked", passMasked.includes(`'${passAlias}'`) && !passMasked.includes(PASS), passMasked);
+check("passphrase restores", restore(passMasked, passMap) === passText);
+check("passphrase survives json", JSON.stringify(maskJson({ p: PASS }, passMap)).includes(passAlias));
+
+const PAD = "  pad  ";
+const padAlias = aliasFor(PAD, "PADDED");
+const padMap: Mapping[] = [...mappings, { alias: padAlias, value: PAD }];
+const padMasked = mask(`x${PAD}y`, padMap);
+check("leading and trailing spaces kept out of the text", padMasked === `x${padAlias}y`, padMasked);
+check("padded value restores byte for byte", restore(padMasked, padMap) === `x${PAD}y`);
 
 console.log(fail === 0 ? "\nALL PASS" : `\n${fail} FAILED`);
 process.exit(fail === 0 ? 0 : 1);
