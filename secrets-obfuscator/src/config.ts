@@ -102,7 +102,21 @@ export function loadConfig(): { config: Config; errors: string[]; warnings: stri
 		raw = parseYaml(fs.readFileSync(file, "utf8"));
 	} catch (err) {
 		const code = (err as NodeJS.ErrnoException).code;
-		errors.push(code === "ENOENT" ? `config not found: ${file}` : `config unreadable (${(err as Error).message}): ${file}`);
+		if (code === "ENOENT") {
+			errors.push(`config not found: ${file}`);
+		} else {
+			// Never echo the parser's code frame: it quotes the file, and that
+			// file holds real secrets. First line only, plus the position.
+			const first = String((err as Error).message ?? err)
+				.split("\n")[0]
+				.trim()
+				.replace(/:$/, "");
+			const pos = (err as { linePos?: Array<{ line: number; col: number }> }).linePos?.[0];
+			const where = pos ? ` (line ${pos.line}, column ${pos.col})` : "";
+			errors.push(
+				`config unreadable${where}: ${first} — quote a value that starts with @ \` % & * or contains ": "`,
+			);
+		}
 		return { config: { mappings: [] }, errors, warnings };
 	}
 

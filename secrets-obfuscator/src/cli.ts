@@ -27,9 +27,9 @@ const flags = new Set(process.argv.slice(2));
 if (flags.has("--help") || flags.has("-h")) {
 	console.log(
 		[
-			"Usage: bun src/cli.ts [--root <dir>] [--config <file>] [--apply] [--verbose]",
+			"Usage: bun src/cli.ts [--root <dir|file>] [--config <file>] [--apply] [--verbose]",
 			"",
-			"  --root     sessions root (default: ~/.omp/agent/sessions)",
+			"  --root     sessions root, or one session file (default: ~/.omp/agent/sessions)",
 			"  --config   mapping file (default: ~/.omp/agent/secrets-obfuscator.yaml)",
 			"  --apply    write changes; without it the sweep only reports",
 			"  --verbose  log every file read",
@@ -63,5 +63,5 @@ if (!apply) console.log("[secrets-obfuscator] dry run: no file will be written")
 const result = sweep({ root, mappings: config.mappings, apply, verbose });
 
 console.log(
-	`[secrets-obfuscator] ${result.files} file(s) scanned, ${result.changed} changed, ${result.replacements} value(s) ${apply ? "masked" : "would be masked"}`,
+	`[secrets-obfuscator] ${result.files} file(s) scanned, ${result.changed} with secrets, ${result.replacements} value(s) ${apply ? "masked" : "would be masked"}, ${result.locked} locked, ${result.live} live`,
 );

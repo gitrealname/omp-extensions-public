@@ -165,16 +165,38 @@ walks a sessions tree and masks them in place.
 ```bash
 bun src/cli.ts                    # dry run: report only
 bun src/cli.ts --apply            # mask in place
-bun src/cli.ts --root <dir>       # sweep another tree
-bun src/cli.ts --config <file>    # use another mapping file
+bun src/cli.ts --root <dir|file>  # another tree, or one session file
+bun src/cli.ts --config <file>    # another mapping file
 ```
 
 | Flag | Default | Meaning |
 |---|---|---|
-| `--root` | `~/.omp/agent/sessions` | tree to walk |
+| `--root` | `~/.omp/agent/sessions` | tree to walk, or one session file |
 | `--config` | `~/.omp/agent/secrets-obfuscator.yaml` | mapping file |
 | `--apply` | off | write changes; without it nothing is written |
 | `--verbose` | off | log every file read |
+
+A file that holds a secret gets one line. Files without a secret stay silent.
+
+```text
+C:\...\session.jsonl: Secrets found: <GITHUB_TOKEN> (2)
+C:\...\session.jsonl: Secrets obfuscated: <GITHUB_TOKEN> (2)
+```
+
+Two kinds of file are reported but never written:
+
+1. A session written in the last minute is flagged `live`. It may still be
+   running, and rewriting it would drop the lines the agent writes next.
+2. A file that cannot be opened for writing, for example a read-only file, is
+   flagged `locked`.
+
+```text
+C:\...\session.jsonl: live, <GITHUB_TOKEN> (2) not maskable (written seconds ago)
+C:\...\session.jsonl: locked, <GITHUB_TOKEN> (2) not masked (EACCES)
+```
+
+On Windows a running omp session is not held with an exclusive lock, so the
+`live` window is what keeps a live session out of reach.
 
 Files ending in `.jsonl`, `.json` or `.log` are masked. JSON lines are rewritten
 field by field. Other lines keep their formatting. The sweep is idempotent: a
@@ -183,11 +205,13 @@ second run reports 0 changes.
 ## Test
 
 ```bash
-bun tests/hooks.e2e.ts
+bun tests/hooks.e2e.ts      # the four handlers, with the payloads omp sends
+bun tests/breaker.e2e.ts    # fail-closed config handling, in subprocesses
+bun tests/reload.e2e.ts     # config hot reload, real file watch
+bun tests/sweep.e2e.ts      # session sweep: report, apply, locked file
 ```
 
-The test drives the four handlers with the payloads omp hands them. It needs no
-model and no network.
+The tests need no model and no network.
 
 ## Limits
 
@@ -199,3 +223,8 @@ model and no network.
    nothing to mask.
 5. Short or common values can mask ordinary text. A value under 4 characters logs
    a warning at load.
+6. The breaker replaces the global `fetch`. `Bun.fetch` is a read-only own
+   property and cannot be replaced. omp reaches the provider through the global
+   `fetch`, which is the call the breaker guards.
+7. If the extension module itself fails to load, neither the hooks nor the breaker
+   exist. Watch the guard line at startup: it names every armed label.

@@ -76,8 +76,18 @@ for (const [name, content] of FATAL) {
 	const config = runCase(content, "config");
 	check(`config reports an error: ${name}`, config.code === 0 && !config.out.includes("errors=0"), config.out.trim());
 	const main = runCase(content, "main");
-	check(`breaker closes, no hooks: ${name}`, main.out.includes("patched=true") && main.out.includes("blocked=yes") && main.out.includes("hooks="), `code=${main.code} ${main.out.trim()}`);
+	check(
+		`breaker closes, no hooks: ${name}`,
+		main.out.includes("patched=true") && main.out.includes("blocked=yes") && main.out.includes("hooks="),
+		`code=${main.code} ${main.out.trim()}`,
+	);
 }
+
+// The error path must never echo the file: it holds real secrets.
+const CANARY = "leakcanary-9f3a";
+const leak = runCase(`mappings:\n  A: @${CANARY}\n`, "main");
+check("a parse error does not quote the file", !leak.out.includes(CANARY), leak.out.trim());
+check("the parse error still blocks", leak.out.includes("blocked=yes"), leak.out.trim());
 
 const OK: Array<[string, string]> = [
 	["valid config", "mappings:\n  A: secret-value\n"],

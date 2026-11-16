@@ -45,6 +45,10 @@ export function blockOutbound(why: string): void {
 		}
 		return original(input as RequestInfo, init as RequestInit);
 	}) as typeof globalThis.fetch;
+
+	// Bun.fetch is a separate, read-only own property; it cannot be replaced.
+	// omp reaches the provider through the global fetch above, which is why
+	// this patch is enough (proved against a real blocked request).
 }
 
 /** True when this process has already been stopped by the breaker. */
